@@ -35,19 +35,20 @@ def login():
     yahoo = OAuth2Session(
         CLIENT_ID,
         redirect_uri=REDIRECT_URI,
-        scope="fspt-r fspt-w"  # Hardcoded for Read/Write apps
+        scope="fspt-r"  # Read-only since app permissions are read only
     )
     auth_url, state = yahoo.authorization_url(AUTH_BASE_URL)
     session["oauth_state"] = state
-    # Debug: show the full Yahoo auth URL
-    return f"<p>Auth URL (copy & paste to browser):</p><p>{auth_url}</p><a href='{auth_url}'>Login with Yahoo</a>"
+    return redirect(auth_url)
 
 @app.route("/callback")
 def callback():
     yahoo = OAuth2Session(CLIENT_ID, state=session["oauth_state"], redirect_uri=REDIRECT_URI)
-    token = yahoo.fetch_token(TOKEN_URL,
-                              client_secret=CLIENT_SECRET,
-                              authorization_response=request.url)
+    token = yahoo.fetch_token(
+        TOKEN_URL,
+        client_secret=CLIENT_SECRET,
+        authorization_response=request.url
+    )
     save_token(token)
     return "✅ Tokens saved. Try /profile, /league/{league_id}, or /roster/{team_key}"
 
@@ -56,12 +57,16 @@ def get_yahoo_session():
     if not token:
         return None
 
-    yahoo = OAuth2Session(CLIENT_ID, token=token, auto_refresh_url=TOKEN_URL,
-                          auto_refresh_kwargs={
-                              'client_id': CLIENT_ID,
-                              'client_secret': CLIENT_SECRET,
-                          },
-                          token_updater=save_token)
+    yahoo = OAuth2Session(
+        CLIENT_ID,
+        token=token,
+        auto_refresh_url=TOKEN_URL,
+        auto_refresh_kwargs={
+            'client_id': CLIENT_ID,
+            'client_secret': CLIENT_SECRET,
+        },
+        token_updater=save_token
+    )
     return yahoo
 
 @app.route("/profile")
