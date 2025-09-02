@@ -39,7 +39,8 @@ def login():
     )
     auth_url, state = yahoo.authorization_url(AUTH_BASE_URL)
     session["oauth_state"] = state
-    return redirect(auth_url)
+    # Debug: show the full Yahoo auth URL
+    return f"<p>Auth URL (copy & paste to browser):</p><p>{auth_url}</p><a href='{auth_url}'>Login with Yahoo</a>"
 
 @app.route("/callback")
 def callback():
