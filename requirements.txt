@@ -2,4 +2,5 @@ flask
 requests
 requests-oauthlib
 gunicorn
+xmltodict
 
