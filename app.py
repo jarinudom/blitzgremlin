@@ -32,7 +32,11 @@ def index():
 
 @app.route("/login")
 def login():
-    yahoo = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, scope=["fspt-r fspt-w"])
+    yahoo = OAuth2Session(
+        CLIENT_ID,
+        redirect_uri=REDIRECT_URI,
+        scope="fspt-r fspt-w"  # Hardcoded for Read/Write apps
+    )
     auth_url, state = yahoo.authorization_url(AUTH_BASE_URL)
     session["oauth_state"] = state
     return redirect(auth_url)
