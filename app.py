@@ -28,6 +28,10 @@ def load_token():
 
 @app.route("/")
 def index():
+    return "<h1>BlitzGremlin Yahoo Connector</h1><a href='/login'>Login with Yahoo</a>"
+
+@app.route("/login")
+def login():
     yahoo = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI, scope=["fspt-r"])
     auth_url, state = yahoo.authorization_url(AUTH_BASE_URL)
     session["oauth_state"] = state
@@ -59,7 +63,7 @@ def get_yahoo_session():
 def profile():
     yahoo = get_yahoo_session()
     if not yahoo:
-        return redirect(url_for("index"))
+        return redirect(url_for("login"))
     r = yahoo.get("https://fantasysports.yahooapis.com/fantasy/v2/users;use_login=1")
     return r.content
 
@@ -67,7 +71,7 @@ def profile():
 def league(league_id):
     yahoo = get_yahoo_session()
     if not yahoo:
-        return redirect(url_for("index"))
+        return redirect(url_for("login"))
     url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}"
     r = yahoo.get(url)
     return r.content
@@ -76,7 +80,7 @@ def league(league_id):
 def roster(team_key):
     yahoo = get_yahoo_session()
     if not yahoo:
-        return redirect(url_for("index"))
+        return redirect(url_for("login"))
     url = f"https://fantasysports.yahooapis.com/fantasy/v2/team/{team_key}/roster"
     r = yahoo.get(url)
     return r.content
