@@ -1,4 +1,4 @@
-import os, json
+import os, json, time
 from flask import Flask, redirect, request, session, url_for, jsonify
 from requests_oauthlib import OAuth2Session
 import xmltodict
@@ -57,6 +57,17 @@ def get_yahoo_session():
     token = load_token()
     if not token:
         return None
+
+    # Proactive refresh: if token expires within 5 min, refresh first
+    if token.get("expires_at") and token["expires_at"] - time.time() < 300:
+        extra = {
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+        }
+        yahoo = OAuth2Session(CLIENT_ID, token=token)
+        new_token = yahoo.refresh_token(TOKEN_URL, **extra)
+        save_token(new_token)
+        token = new_token
 
     yahoo = OAuth2Session(
         CLIENT_ID,
