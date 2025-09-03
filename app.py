@@ -51,7 +51,7 @@ def callback():
         authorization_response=request.url
     )
     save_token(token)
-    return "✅ Tokens saved. Endpoints: /profile, /my-leagues, /league/{league_id}, /roster/{team_key}, /matchups/{league_id}/{week}, /standings/{league_id}, /transactions/{league_id}"
+    return "✅ Tokens saved. Endpoints: /profile, /my-leagues, /my-team, /league/{league_id}, /roster/{team_key}, /matchups/{league_id}/{week}, /standings/{league_id}, /transactions/{league_id}"
 
 def get_yahoo_session():
     token = load_token()
@@ -97,6 +97,36 @@ def my_leagues():
     url = "https://fantasysports.yahooapis.com/fantasy/v2/users;use_login=1/games/leagues"
     r = yahoo.get(url)
     return jsonify(xmltodict.parse(r.content))
+
+@app.route("/my-team")
+def my_team():
+    yahoo = get_yahoo_session()
+    if not yahoo:
+        return redirect(url_for("login"))
+    url = "https://fantasysports.yahooapis.com/fantasy/v2/users;use_login=1/games/leagues/teams"
+    r = yahoo.get(url)
+    data = xmltodict.parse(r.content)
+
+    # Filter down to just the teams owned by the current user
+    teams = []
+    games = data["fantasy_content"]["users"]["user"]["games"]["game"]
+    if isinstance(games, dict):
+        games = [games]
+    for game in games:
+        if "leagues" in game:
+            leagues = game["leagues"]["league"]
+            if isinstance(leagues, dict):
+                leagues = [leagues]
+            for league in leagues:
+                if "teams" in league:
+                    teams_list = league["teams"]["team"]
+                    if isinstance(teams_list, dict):
+                        teams_list = [teams_list]
+                    for team in teams_list:
+                        if team.get("is_owned_by_current_login") == "1":
+                            teams.append(team)
+
+    return jsonify({"my_teams": teams})
 
 @app.route("/league/<league_id>")
 def league(league_id):
