@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import requests
 import xmltodict
 from flask import Flask, redirect, request, session, jsonify
@@ -16,37 +17,61 @@ REDIRECT_URI = os.environ.get("REDIRECT_URI", "https://blitzgremlin.onrender.com
 AUTH_BASE_URL = "https://api.login.yahoo.com/oauth2/request_auth"
 TOKEN_URL = "https://api.login.yahoo.com/oauth2/get_token"
 
+TOKEN_FILE = "token.json"
+
 # -------------------------------
 # Helpers
 # -------------------------------
 
 def save_token(token):
-    with open("token.json", "w") as f:
+    with open(TOKEN_FILE, "w") as f:
         json.dump(token, f)
 
 def load_token():
-    if os.path.exists("token.json"):
-        with open("token.json", "r") as f:
+    if os.path.exists(TOKEN_FILE):
+        with open(TOKEN_FILE, "r") as f:
             return json.load(f)
     return None
 
 def normalize_league_id(league_id: str) -> str:
-    """Ensure league_id is in full Yahoo key format: 461.l.{league_id}"""
+    """Ensure league_id is in full Yahoo key format if only digits are provided."""
     if league_id.isdigit():
         return f"461.l.{league_id}"
     return league_id
 
 def yahoo_session():
     token = load_token()
-    return OAuth2Session(CLIENT_ID, token=token, redirect_uri=REDIRECT_URI, auto_refresh_url=TOKEN_URL,
-                         auto_refresh_kwargs={"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET},
-                         token_updater=save_token)
+    if not token:
+        return None
+
+    # proactive refresh if expiring within 5 minutes
+    if token.get("expires_at") and token["expires_at"] - time.time() < 300:
+        extra = {"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET}
+        yahoo = OAuth2Session(CLIENT_ID, token=token)
+        try:
+            new_token = yahoo.refresh_token(TOKEN_URL, **extra)
+            save_token(new_token)
+            token = new_token
+        except Exception as e:
+            print("⚠️ Token refresh failed:", e)
+
+    yahoo = OAuth2Session(
+        CLIENT_ID,
+        token=token,
+        redirect_uri=REDIRECT_URI,
+        auto_refresh_url=TOKEN_URL,
+        auto_refresh_kwargs={"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET},
+        token_updater=save_token
+    )
+    return yahoo
 
 def fetch_yahoo(url):
     yahoo = yahoo_session()
-    resp = yahoo.get(url, params={"format": "json"})
+    if not yahoo:
+        return {"error": "Not authenticated"}
+    resp = yahoo.get(url)
     resp.raise_for_status()
-    return resp.json()
+    return xmltodict.parse(resp.content)
 
 # -------------------------------
 # Routes
@@ -127,22 +152,42 @@ def all_rosters(league_id):
     url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/teams/roster"
     data = fetch_yahoo(url)
 
-    # Trim the fat (remove headshots, image urls, unnecessary metadata)
     try:
         teams = data["fantasy_content"]["league"]["teams"]["team"]
+        if isinstance(teams, dict):
+            teams = [teams]
+
+        simplified = []
         for team in teams:
-            if "roster" in team:
-                players = team["roster"]["players"]["player"]
-                for player in players:
-                    player.pop("headshot", None)
-                    player.pop("image_url", None)
-                    player.pop("editorial_team_url", None)
-                    player.pop("url", None)
-                    player.pop("uniform_number", None)
+            players = team.get("roster", {}).get("players", {}).get("player", [])
+            if isinstance(players, dict):
+                players = [players]
+
+            simplified_players = []
+            for p in players:
+                simplified_players.append({
+                    "player_id": p.get("player_id"),
+                    "player_key": p.get("player_key"),
+                    "name": p.get("name", {}).get("full"),
+                    "position": p.get("display_position"),
+                    "primary_position": p.get("primary_position"),
+                    "team_abbr": p.get("editorial_team_abbr"),
+                    "bye_week": p.get("bye_weeks", {}).get("week"),
+                    "slot": p.get("selected_position", {}).get("position"),
+                    "status": p.get("status")
+                })
+
+            simplified.append({
+                "team_key": team.get("team_key"),
+                "team_id": team.get("team_id"),
+                "name": team.get("name"),
+                "manager": team.get("managers", {}).get("manager", {}).get("nickname"),
+                "players": simplified_players
+            })
+
+        return jsonify({"league_id": league_id, "teams": simplified})
     except Exception as e:
         return jsonify({"error": str(e), "raw": data}), 500
-
-    return jsonify(data)
 
 @app.route("/available-players/<league_id>")
 def available_players(league_id):
