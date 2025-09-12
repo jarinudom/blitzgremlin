@@ -164,7 +164,40 @@ def all_rosters(league_id):
     url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/teams/roster"
     r = yahoo.get(url)
     data = xmltodict.parse(r.content)
-    return jsonify(data)
+
+    teams = data["fantasy_content"]["league"]["teams"]["team"]
+    if isinstance(teams, dict):
+        teams = [teams]
+
+    simplified = []
+    for team in teams:
+        players = team.get("roster", {}).get("players", {}).get("player", [])
+        if isinstance(players, dict):
+            players = [players]
+
+        simplified_players = []
+        for p in players:
+            simplified_players.append({
+                "player_id": p.get("player_id"),
+                "player_key": p.get("player_key"),
+                "name": p.get("name", {}).get("full"),
+                "position": p.get("display_position"),
+                "primary_position": p.get("primary_position"),
+                "team_abbr": p.get("editorial_team_abbr"),
+                "bye_week": p.get("bye_weeks", {}).get("week"),
+                "slot": p.get("selected_position", {}).get("position"),
+                "status": p.get("status")
+            })
+
+        simplified.append({
+            "team_key": team.get("team_key"),
+            "team_id": team.get("team_id"),
+            "name": team.get("name"),
+            "manager": team.get("managers", {}).get("manager", {}).get("nickname"),
+            "players": simplified_players
+        })
+
+    return jsonify({"league_id": league_id, "teams": simplified})
 
 @app.route("/roster/<team_key>")
 def roster(team_key):
