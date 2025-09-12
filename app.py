@@ -1,255 +1,160 @@
-import os, json, time
-from flask import Flask, redirect, request, session, url_for, jsonify, request as flask_request
-from requests_oauthlib import OAuth2Session
+import os
+import json
+import requests
 import xmltodict
+from flask import Flask, redirect, request, session, jsonify
+from requests_oauthlib import OAuth2Session
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "supersecret")
 
-# Load secrets from environment
-CLIENT_ID = os.getenv("YAHOO_CLIENT_ID")
-CLIENT_SECRET = os.getenv("YAHOO_CLIENT_SECRET")
-REDIRECT_URI = os.getenv("YAHOO_REDIRECT_URI", "http://localhost:5000/callback")
+# Yahoo API credentials
+CLIENT_ID = os.environ.get("YAHOO_CLIENT_ID")
+CLIENT_SECRET = os.environ.get("YAHOO_CLIENT_SECRET")
+REDIRECT_URI = os.environ.get("REDIRECT_URI", "https://blitzgremlin.onrender.com/callback")
 
 AUTH_BASE_URL = "https://api.login.yahoo.com/oauth2/request_auth"
 TOKEN_URL = "https://api.login.yahoo.com/oauth2/get_token"
 
-# Token storage file
-TOKEN_FILE = "token.json"
-TEAMS_CACHE_FILE = "teams.json"
+# -------------------------------
+# Helpers
+# -------------------------------
 
 def save_token(token):
-    with open(TOKEN_FILE, "w") as f:
+    with open("token.json", "w") as f:
         json.dump(token, f)
 
 def load_token():
-    if os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE) as f:
+    if os.path.exists("token.json"):
+        with open("token.json", "r") as f:
             return json.load(f)
     return None
 
-def save_teams(data):
-    with open(TEAMS_CACHE_FILE, "w") as f:
-        json.dump(data, f)
+def normalize_league_id(league_id: str) -> str:
+    """Ensure league_id is in full Yahoo key format: 461.l.{league_id}"""
+    if league_id.isdigit():
+        return f"461.l.{league_id}"
+    return league_id
 
-def load_teams():
-    if os.path.exists(TEAMS_CACHE_FILE):
-        with open(TEAMS_CACHE_FILE) as f:
-            return json.load(f)
-    return None
+def yahoo_session():
+    token = load_token()
+    return OAuth2Session(CLIENT_ID, token=token, redirect_uri=REDIRECT_URI, auto_refresh_url=TOKEN_URL,
+                         auto_refresh_kwargs={"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET},
+                         token_updater=save_token)
+
+def fetch_yahoo(url):
+    yahoo = yahoo_session()
+    resp = yahoo.get(url, params={"format": "json"})
+    resp.raise_for_status()
+    return resp.json()
+
+# -------------------------------
+# Routes
+# -------------------------------
 
 @app.route("/")
 def index():
-    return "<h1>BlitzGremlin Yahoo Connector</h1><a href='/login'>Login with Yahoo</a>"
+    return "BlitzGremlin Yahoo Fantasy API is live 🎉"
 
 @app.route("/login")
 def login():
-    yahoo = OAuth2Session(
-        CLIENT_ID,
-        redirect_uri=REDIRECT_URI,
-        scope="fspt-r"
-    )
-    auth_url, state = yahoo.authorization_url(AUTH_BASE_URL)
+    yahoo = OAuth2Session(CLIENT_ID, redirect_uri=REDIRECT_URI)
+    authorization_url, state = yahoo.authorization_url(AUTH_BASE_URL)
     session["oauth_state"] = state
-    return redirect(auth_url)
+    return redirect(authorization_url)
 
 @app.route("/callback")
 def callback():
     yahoo = OAuth2Session(CLIENT_ID, state=session.get("oauth_state"), redirect_uri=REDIRECT_URI)
-    token = yahoo.fetch_token(
-        TOKEN_URL,
-        client_secret=CLIENT_SECRET,
-        authorization_response=request.url
-    )
+    token = yahoo.fetch_token(TOKEN_URL, client_secret=CLIENT_SECRET,
+                              authorization_response=request.url)
     save_token(token)
-    return "✅ Tokens saved. Endpoints: /profile, /my-leagues, /my-team, /league/{league_id}, /teams/{league_id}, /all-rosters/{league_id}, /roster/{team_key}, /players/{league_id}, /matchups/{league_id}/{week}, /standings/{league_id}, /transactions/{league_id}"
-
-def get_yahoo_session():
-    token = load_token()
-    if not token:
-        return None
-
-    if token.get("expires_at") and token["expires_at"] - time.time() < 300:
-        extra = {"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET}
-        yahoo = OAuth2Session(CLIENT_ID, token=token)
-        new_token = yahoo.refresh_token(TOKEN_URL, **extra)
-        save_token(new_token)
-        token = new_token
-
-    yahoo = OAuth2Session(
-        CLIENT_ID,
-        token=token,
-        auto_refresh_url=TOKEN_URL,
-        auto_refresh_kwargs={"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET},
-        token_updater=save_token
-    )
-    return yahoo
+    return "Authentication complete! You can now use the API."
 
 @app.route("/profile")
 def profile():
-    yahoo = get_yahoo_session()
-    if not yahoo:
-        return redirect(url_for("login"))
-    r = yahoo.get("https://fantasysports.yahooapis.com/fantasy/v2/users;use_login=1")
-    return jsonify(xmltodict.parse(r.content))
+    url = "https://fantasysports.yahooapis.com/fantasy/v2/users;use_login=1"
+    return jsonify(fetch_yahoo(url))
 
 @app.route("/my-leagues")
 def my_leagues():
-    yahoo = get_yahoo_session()
-    if not yahoo:
-        return redirect(url_for("login"))
-    url = "https://fantasysports.yahooapis.com/fantasy/v2/users;use_login=1/games/leagues"
-    r = yahoo.get(url)
-    return jsonify(xmltodict.parse(r.content))
+    url = "https://fantasysports.yahooapis.com/fantasy/v2/users;use_login=1/games;game_keys=nfl/leagues"
+    return jsonify(fetch_yahoo(url))
 
 @app.route("/my-team")
 def my_team():
-    yahoo = get_yahoo_session()
-    if not yahoo:
-        return redirect(url_for("login"))
-    url = "https://fantasysports.yahooapis.com/fantasy/v2/users;use_login=1/games/leagues/teams"
-    r = yahoo.get(url)
-    data = xmltodict.parse(r.content)
-
-    teams = []
-    games = data["fantasy_content"]["users"]["user"]["games"]["game"]
-    if isinstance(games, dict):
-        games = [games]
-    for game in games:
-        if "leagues" in game:
-            leagues = game["leagues"]["league"]
-            if isinstance(leagues, dict):
-                leagues = [leagues]
-            for league in leagues:
-                if "teams" in league:
-                    teams_list = league["teams"]["team"]
-                    if isinstance(teams_list, dict):
-                        teams_list = [teams_list]
-                    for team in teams_list:
-                        if team.get("is_owned_by_current_login") == "1":
-                            teams.append(team)
-
-    return jsonify({"my_teams": teams})
+    url = "https://fantasysports.yahooapis.com/fantasy/v2/users;use_login=1/games;game_keys=nfl/teams"
+    return jsonify(fetch_yahoo(url))
 
 @app.route("/league/<league_id>")
-def league(league_id):
-    yahoo = get_yahoo_session()
-    if not yahoo:
-        return redirect(url_for("login"))
+def get_league(league_id):
+    league_id = normalize_league_id(league_id)
     url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}"
-    r = yahoo.get(url)
-    return jsonify(xmltodict.parse(r.content))
+    return jsonify(fetch_yahoo(url))
+
+@app.route("/matchups/<league_id>/<week>")
+def get_matchups(league_id, week):
+    league_id = normalize_league_id(league_id)
+    url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/scoreboard;week={week}"
+    return jsonify(fetch_yahoo(url))
+
+@app.route("/standings/<league_id>")
+def get_standings(league_id):
+    league_id = normalize_league_id(league_id)
+    url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/standings"
+    return jsonify(fetch_yahoo(url))
+
+@app.route("/transactions/<league_id>")
+def get_transactions(league_id):
+    league_id = normalize_league_id(league_id)
+    url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/transactions"
+    return jsonify(fetch_yahoo(url))
 
 @app.route("/teams/<league_id>")
-def teams(league_id):
-    cached = load_teams()
-    if cached and cached.get("league_id") == league_id:
-        return jsonify(cached)
-
-    yahoo = get_yahoo_session()
-    if not yahoo:
-        return redirect(url_for("login"))
+def get_teams(league_id):
+    league_id = normalize_league_id(league_id)
     url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/teams"
-    r = yahoo.get(url)
-    data = xmltodict.parse(r.content)
-    save_teams({"league_id": league_id, "teams": data})
-    return jsonify(data)
+    return jsonify(fetch_yahoo(url))
+
+@app.route("/roster/<team_key>")
+def get_roster(team_key):
+    url = f"https://fantasysports.yahooapis.com/fantasy/v2/team/{team_key}/roster"
+    return jsonify(fetch_yahoo(url))
 
 @app.route("/all-rosters/<league_id>")
 def all_rosters(league_id):
-    yahoo = get_yahoo_session()
-    if not yahoo:
-        return redirect(url_for("login"))
-
+    league_id = normalize_league_id(league_id)
     url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/teams/roster"
-    r = yahoo.get(url)
-    data = xmltodict.parse(r.content)
+    data = fetch_yahoo(url)
 
-    teams = data["fantasy_content"]["league"]["teams"]["team"]
-    if isinstance(teams, dict):
-        teams = [teams]
+    # Trim the fat (remove headshots, image urls, unnecessary metadata)
+    try:
+        teams = data["fantasy_content"]["league"]["teams"]["team"]
+        for team in teams:
+            if "roster" in team:
+                players = team["roster"]["players"]["player"]
+                for player in players:
+                    player.pop("headshot", None)
+                    player.pop("image_url", None)
+                    player.pop("editorial_team_url", None)
+                    player.pop("url", None)
+                    player.pop("uniform_number", None)
+    except Exception as e:
+        return jsonify({"error": str(e), "raw": data}), 500
 
-    simplified = []
-    for team in teams:
-        players = team.get("roster", {}).get("players", {}).get("player", [])
-        if isinstance(players, dict):
-            players = [players]
-
-        simplified_players = []
-        for p in players:
-            simplified_players.append({
-                "player_id": p.get("player_id"),
-                "player_key": p.get("player_key"),
-                "name": p.get("name", {}).get("full"),
-                "position": p.get("display_position"),
-                "primary_position": p.get("primary_position"),
-                "team_abbr": p.get("editorial_team_abbr"),
-                "bye_week": p.get("bye_weeks", {}).get("week"),
-                "slot": p.get("selected_position", {}).get("position"),
-                "status": p.get("status")
-            })
-
-        simplified.append({
-            "team_key": team.get("team_key"),
-            "team_id": team.get("team_id"),
-            "name": team.get("name"),
-            "manager": team.get("managers", {}).get("manager", {}).get("nickname"),
-            "players": simplified_players
-        })
-
-    return jsonify({"league_id": league_id, "teams": simplified})
-
-@app.route("/roster/<team_key>")
-def roster(team_key):
-    yahoo = get_yahoo_session()
-    if not yahoo:
-        return redirect(url_for("login"))
-    url = f"https://fantasysports.yahooapis.com/fantasy/v2/team/{team_key}/roster"
-    r = yahoo.get(url)
-    return jsonify(xmltodict.parse(r.content))
-
-@app.route("/players/<league_id>")
-def players(league_id):
-    yahoo = get_yahoo_session()
-    if not yahoo:
-        return redirect(url_for("login"))
-
-    status = flask_request.args.get("status", "A")  # default: all available
-    position = flask_request.args.get("position")   # optional
-
-    url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/players;status={status}"
-    if position:
-        url += f";position={position}"
-
-    r = yahoo.get(url)
-    data = xmltodict.parse(r.content)
     return jsonify(data)
 
-@app.route("/matchups/<league_id>/<week>")
-def matchups(league_id, week):
-    yahoo = get_yahoo_session()
-    if not yahoo:
-        return redirect(url_for("login"))
-    url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/scoreboard;week={week}"
-    r = yahoo.get(url)
-    return jsonify(xmltodict.parse(r.content))
+@app.route("/available-players/<league_id>")
+def available_players(league_id):
+    league_id = normalize_league_id(league_id)
+    params = request.args.to_dict()
+    filters = ";".join([f"{k}={v}" for k, v in params.items()])
+    url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/players{';' + filters if filters else ''}"
+    return jsonify(fetch_yahoo(url))
 
-@app.route("/standings/<league_id>")
-def standings(league_id):
-    yahoo = get_yahoo_session()
-    if not yahoo:
-        return redirect(url_for("login"))
-    url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/standings"
-    r = yahoo.get(url)
-    return jsonify(xmltodict.parse(r.content))
+# -------------------------------
+# Run
+# -------------------------------
 
-@app.route("/transactions/<league_id>")
-def transactions(league_id):
-    yahoo = get_yahoo_session()
-    if not yahoo:
-        return redirect(url_for("login"))
-    url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/transactions"
-    r = yahoo.get(url)
-    return jsonify(xmltodict.parse(r.content))
-
-# Render/Production: app is served by gunicorn, so no app.run() here.
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
