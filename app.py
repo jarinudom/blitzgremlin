@@ -16,6 +16,7 @@ TOKEN_URL = "https://api.login.yahoo.com/oauth2/get_token"
 
 # Token storage file
 TOKEN_FILE = "token.json"
+TEAMS_CACHE_FILE = "teams.json"
 
 def save_token(token):
     with open(TOKEN_FILE, "w") as f:
@@ -24,6 +25,16 @@ def save_token(token):
 def load_token():
     if os.path.exists(TOKEN_FILE):
         with open(TOKEN_FILE) as f:
+            return json.load(f)
+    return None
+
+def save_teams(data):
+    with open(TEAMS_CACHE_FILE, "w") as f:
+        json.dump(data, f)
+
+def load_teams():
+    if os.path.exists(TEAMS_CACHE_FILE):
+        with open(TEAMS_CACHE_FILE) as f:
             return json.load(f)
     return None
 
@@ -36,7 +47,7 @@ def login():
     yahoo = OAuth2Session(
         CLIENT_ID,
         redirect_uri=REDIRECT_URI,
-        scope="fspt-r"  # Read-only
+        scope="fspt-r"
     )
     auth_url, state = yahoo.authorization_url(AUTH_BASE_URL)
     session["oauth_state"] = state
@@ -51,19 +62,15 @@ def callback():
         authorization_response=request.url
     )
     save_token(token)
-    return "✅ Tokens saved. Endpoints: /profile, /my-leagues, /my-team, /league/{league_id}, /roster/{team_key}, /matchups/{league_id}/{week}, /standings/{league_id}, /transactions/{league_id}"
+    return "✅ Tokens saved. Endpoints: /profile, /my-leagues, /my-team, /league/{league_id}, /teams/{league_id}, /all-rosters/{league_id}, /roster/{team_key}, /matchups/{league_id}/{week}, /standings/{league_id}, /transactions/{league_id}"
 
 def get_yahoo_session():
     token = load_token()
     if not token:
         return None
 
-    # Proactive refresh: if token expires within 5 min, refresh first
     if token.get("expires_at") and token["expires_at"] - time.time() < 300:
-        extra = {
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-        }
+        extra = {"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET}
         yahoo = OAuth2Session(CLIENT_ID, token=token)
         new_token = yahoo.refresh_token(TOKEN_URL, **extra)
         save_token(new_token)
@@ -73,10 +80,7 @@ def get_yahoo_session():
         CLIENT_ID,
         token=token,
         auto_refresh_url=TOKEN_URL,
-        auto_refresh_kwargs={
-            'client_id': CLIENT_ID,
-            'client_secret': CLIENT_SECRET,
-        },
+        auto_refresh_kwargs={"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET},
         token_updater=save_token
     )
     return yahoo
@@ -107,7 +111,6 @@ def my_team():
     r = yahoo.get(url)
     data = xmltodict.parse(r.content)
 
-    # Filter down to just the teams owned by the current user
     teams = []
     games = data["fantasy_content"]["users"]["user"]["games"]["game"]
     if isinstance(games, dict):
@@ -136,6 +139,32 @@ def league(league_id):
     url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}"
     r = yahoo.get(url)
     return jsonify(xmltodict.parse(r.content))
+
+@app.route("/teams/<league_id>")
+def teams(league_id):
+    cached = load_teams()
+    if cached and cached.get("league_id") == league_id:
+        return jsonify(cached)
+
+    yahoo = get_yahoo_session()
+    if not yahoo:
+        return redirect(url_for("login"))
+    url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/teams"
+    r = yahoo.get(url)
+    data = xmltodict.parse(r.content)
+    save_teams({"league_id": league_id, "teams": data})
+    return jsonify(data)
+
+@app.route("/all-rosters/<league_id>")
+def all_rosters(league_id):
+    yahoo = get_yahoo_session()
+    if not yahoo:
+        return redirect(url_for("login"))
+
+    url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/teams/roster"
+    r = yahoo.get(url)
+    data = xmltodict.parse(r.content)
+    return jsonify(data)
 
 @app.route("/roster/<team_key>")
 def roster(team_key):
@@ -174,4 +203,3 @@ def transactions(league_id):
     return jsonify(xmltodict.parse(r.content))
 
 # Render/Production: app is served by gunicorn, so no app.run() here.
-
