@@ -1,5 +1,5 @@
 import os, json, time
-from flask import Flask, redirect, request, session, url_for, jsonify
+from flask import Flask, redirect, request, session, url_for, jsonify, request as flask_request
 from requests_oauthlib import OAuth2Session
 import xmltodict
 
@@ -62,7 +62,7 @@ def callback():
         authorization_response=request.url
     )
     save_token(token)
-    return "✅ Tokens saved. Endpoints: /profile, /my-leagues, /my-team, /league/{league_id}, /teams/{league_id}, /all-rosters/{league_id}, /roster/{team_key}, /matchups/{league_id}/{week}, /standings/{league_id}, /transactions/{league_id}"
+    return "✅ Tokens saved. Endpoints: /profile, /my-leagues, /my-team, /league/{league_id}, /teams/{league_id}, /all-rosters/{league_id}, /roster/{team_key}, /players/{league_id}, /matchups/{league_id}/{week}, /standings/{league_id}, /transactions/{league_id}"
 
 def get_yahoo_session():
     token = load_token()
@@ -174,6 +174,23 @@ def roster(team_key):
     url = f"https://fantasysports.yahooapis.com/fantasy/v2/team/{team_key}/roster"
     r = yahoo.get(url)
     return jsonify(xmltodict.parse(r.content))
+
+@app.route("/players/<league_id>")
+def players(league_id):
+    yahoo = get_yahoo_session()
+    if not yahoo:
+        return redirect(url_for("login"))
+
+    status = flask_request.args.get("status", "A")  # default: all available
+    position = flask_request.args.get("position")   # optional
+
+    url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/players;status={status}"
+    if position:
+        url += f";position={position}"
+
+    r = yahoo.get(url)
+    data = xmltodict.parse(r.content)
+    return jsonify(data)
 
 @app.route("/matchups/<league_id>/<week>")
 def matchups(league_id, week):
