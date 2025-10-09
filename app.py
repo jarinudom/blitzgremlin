@@ -219,7 +219,7 @@ def get_waivers():
       status     – A (all available), FA (free agents), W (waivers) (optional, defaults to A)
     """
 
-    league_id = request.args.get("league_id")
+    league_id = normalize_league_id(request.args.get("league_id"))
     position = request.args.get("position", "ALL")
     status = request.args.get("status", "A")
 
