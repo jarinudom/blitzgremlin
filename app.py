@@ -203,3 +203,79 @@ def available_players(league_id):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
+###############################################################
+# 🧠 Yahoo Waivers / Free Agents Endpoint
+###############################################################
+
+@app.route("/yahoo/waivers", methods=["GET"])
+def get_waivers():
+    """
+    Fetch available players from Yahoo Fantasy API filtered by position and status.
+
+    Query params:
+      league_id  – Yahoo league ID (required)
+      position   – QB, RB, WR, TE, DEF, K (optional, defaults to ALL)
+      status     – A (all available), FA (free agents), W (waivers) (optional, defaults to FA)
+
+    Example:
+      /yahoo/waivers?league_id=1157326&position=RB&status=FA
+    """
+
+    league_id = request.args.get("league_id")
+    position = request.args.get("position", "ALL")
+    status = request.args.get("status", "FA")
+
+    if not league_id:
+        return jsonify({"error": "league_id is required"}), 400
+
+    resource_path = f"league/{league_id}/players;status={status}"
+    if position and position != "ALL":
+        resource_path += f";position={position}"
+
+    yahoo_url = f"https://fantasysports.yahooapis.com/fantasy/v2/{resource_path}"
+    headers = {
+        "Authorization": f"Bearer {get_yahoo_access_token()}",
+        "Accept": "application/json"
+    }
+
+    response = requests.get(yahoo_url, headers=headers)
+
+    if response.status_code != 200:
+        return jsonify({
+            "error": "Yahoo API call failed",
+            "status_code": response.status_code,
+            "details": response.text
+        }), 500
+
+    data = response.json()
+    parsed_players = parse_yahoo_players_response(data)
+
+    return jsonify({"count": len(parsed_players), "players": parsed_players})
+
+
+def parse_yahoo_players_response(data):
+    """Parse Yahoo's Players Collection into a clean list."""
+    players = []
+    try:
+        league = data.get("fantasy_content", {}).get("league", {})
+        player_list = league.get("players", {})
+
+        for key, value in player_list.items():
+            if not isinstance(value, dict) or "player" not in value:
+                continue
+            p = value["player"][0]
+            name = p.get("name", {}).get("full") if isinstance(p.get("name"), dict) else None
+
+            players.append({
+                "player_id": p.get("player_id"),
+                "name": name,
+                "team": p.get("editorial_team_abbr"),
+                "position": p.get("primary_position"),
+                "status": p.get("status"),
+            })
+    except Exception as e:
+        print(f"Error parsing Yahoo player data: {e}")
+
+    return players
+
