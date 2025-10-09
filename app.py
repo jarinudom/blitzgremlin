@@ -234,12 +234,8 @@ def get_waivers():
         resource_path += f";position={position}"
 
     yahoo_url = f"https://fantasysports.yahooapis.com/fantasy/v2/{resource_path}"
-    headers = {
-        "Authorization": f"Bearer {get_yahoo_access_token()}",
-        "Accept": "application/json"
-    }
 
-    response = requests.get(yahoo_url, headers=headers)
+    response = requests.get(yahoo_url, headers=get_yahoo_headers())
 
     if response.status_code != 200:
         return jsonify({
