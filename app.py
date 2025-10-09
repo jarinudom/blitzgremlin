@@ -211,42 +211,32 @@ if __name__ == "__main__":
 @app.route("/yahoo/waivers", methods=["GET"])
 def get_waivers():
     """
-    Fetch available players from Yahoo Fantasy API filtered by position and status.
+    Fetch available players (waivers/free agents) filtered by position and status.
 
     Query params:
       league_id  – Yahoo league ID (required)
       position   – QB, RB, WR, TE, DEF, K (optional, defaults to ALL)
-      status     – A (all available), FA (free agents), W (waivers) (optional, defaults to FA)
-
-    Example:
-      /yahoo/waivers?league_id=1157326&position=RB&status=FA
+      status     – A (all available), FA (free agents), W (waivers) (optional, defaults to A)
     """
 
     league_id = request.args.get("league_id")
     position = request.args.get("position", "ALL")
-    status = request.args.get("status", "FA")
+    status = request.args.get("status", "A")
 
     if not league_id:
         return jsonify({"error": "league_id is required"}), 400
 
+    # Build Yahoo Players Collection endpoint
     resource_path = f"league/{league_id}/players;status={status}"
     if position and position != "ALL":
         resource_path += f";position={position}"
 
     yahoo_url = f"https://fantasysports.yahooapis.com/fantasy/v2/{resource_path}"
 
-    response = requests.get(yahoo_url, headers=get_yahoo_headers())
+    # Use the shared fetch_yahoo() helper — handles auth + errors automatically
+    data = fetch_yahoo(yahoo_url)
 
-    if response.status_code != 200:
-        return jsonify({
-            "error": "Yahoo API call failed",
-            "status_code": response.status_code,
-            "details": response.text
-        }), 500
-
-    data = response.json()
     parsed_players = parse_yahoo_players_response(data)
-
     return jsonify({"count": len(parsed_players), "players": parsed_players})
 
 
