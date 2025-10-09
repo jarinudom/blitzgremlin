@@ -254,23 +254,36 @@ def parse_yahoo_players_response(data):
     players = []
     try:
         league = data.get("fantasy_content", {}).get("league", {})
-        player_list = league.get("players", {})
+        players_data = league.get("players", {})
 
-        for key, value in player_list.items():
-            if not isinstance(value, dict) or "player" not in value:
-                continue
-            p = value["player"][0]
-            name = p.get("name", {}).get("full") if isinstance(p.get("name"), dict) else None
+        # Yahoo sometimes returns "player" as a list or as an object with numeric keys
+        player_entries = players_data.get("player")
 
-            players.append({
-                "player_id": p.get("player_id"),
-                "name": name,
-                "team": p.get("editorial_team_abbr"),
-                "position": p.get("primary_position"),
-                "status": p.get("status"),
-            })
+        if isinstance(player_entries, list):
+            for p in player_entries:
+                name_info = p.get("name", {})
+                players.append({
+                    "player_id": p.get("player_id"),
+                    "name": name_info.get("full"),
+                    "team": p.get("editorial_team_abbr"),
+                    "position": p.get("primary_position"),
+                    "status": p.get("status", "FA"),
+                })
+        elif isinstance(players_data, dict):
+            for key, value in players_data.items():
+                if isinstance(value, dict) and "player" in value:
+                    p = value["player"][0]
+                    name_info = p.get("name", {})
+                    players.append({
+                        "player_id": p.get("player_id"),
+                        "name": name_info.get("full"),
+                        "team": p.get("editorial_team_abbr"),
+                        "position": p.get("primary_position"),
+                        "status": p.get("status", "FA"),
+                    })
+
     except Exception as e:
-        print(f"Error parsing Yahoo player data: {e}")
+        print(f"⚠️ Error parsing Yahoo player data: {e}")
 
     return players
 
