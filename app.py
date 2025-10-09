@@ -250,32 +250,32 @@ def get_waivers():
 
 
 def parse_yahoo_players_response(data):
-    """Parse Yahoo's Players Collection into a clean list."""
+    """Parse Yahoo's Players Collection into a clean, flat list using player_key."""
     players = []
     try:
         league = data.get("fantasy_content", {}).get("league", {})
         players_data = league.get("players", {})
 
-        # Yahoo sometimes returns "player" as a list or as an object with numeric keys
+        # Yahoo may return "player" as a list or keyed dict
         player_entries = players_data.get("player")
 
         if isinstance(player_entries, list):
             for p in player_entries:
                 name_info = p.get("name", {})
                 players.append({
-                    "player_id": p.get("player_id"),
+                    "player_key": p.get("player_key"),
                     "name": name_info.get("full"),
                     "team": p.get("editorial_team_abbr"),
                     "position": p.get("primary_position"),
                     "status": p.get("status", "FA"),
                 })
         elif isinstance(players_data, dict):
-            for key, value in players_data.items():
+            for _, value in players_data.items():
                 if isinstance(value, dict) and "player" in value:
                     p = value["player"][0]
                     name_info = p.get("name", {})
                     players.append({
-                        "player_id": p.get("player_id"),
+                        "player_key": p.get("player_key"),
                         "name": name_info.get("full"),
                         "team": p.get("editorial_team_abbr"),
                         "position": p.get("primary_position"),
