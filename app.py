@@ -276,6 +276,7 @@ def parse_yahoo_players_response(data: dict) -> list[dict]:
     
     return players
 
+
 @app.route("/waivers", methods=["GET"])
 def get_waivers():
     """
@@ -321,4 +322,185 @@ def get_waivers():
     except Exception as e:
         print(f"⚠️ Error in get_waivers: {e}")
         return jsonify({"error": "Failed to fetch waivers data"}), 500
+
+
+###############################################################
+# 🔎 Player Stats (league-scoped)
+###############################################################
+
+def build_player_stats_url(league_id: str, player_key: str, stats_type: str | None, week: str | None) -> str:
+    """Build Yahoo API URL to fetch a player's stats within a league context.
+    Uses the league-scoped players collection so stat ids/values align with the league's settings.
+    """
+    resource = f"league/{league_id}/players;player_keys={player_key}/stats"
+    # Append optional stats selectors per Yahoo format
+    if stats_type:
+        resource += f";type={stats_type}"
+    if week:
+        resource += f";week={week}"
+    return f"{YAHOO_BASE_URL}/{resource}"
+
+
+def get_league_stat_categories(league_id: str) -> dict:
+    """Return a mapping of stat_id -> display_name for the given league.
+    Falls back to 'name' if 'display_name' is unavailable.
+    """
+    try:
+        settings_url = f"{YAHOO_BASE_URL}/league/{league_id}/settings"
+        data = fetch_yahoo(settings_url)
+        league = data.get("fantasy_content", {}).get("league", {})
+        stats_node = (
+            league.get("settings", {})
+                 .get("stat_categories", {})
+                 .get("stats", {})
+                 .get("stat")
+        )
+        if not stats_node:
+            return {}
+        if isinstance(stats_node, dict):
+            stats_node = [stats_node]
+        mapping = {}
+        for s in stats_node:
+            sid = str(s.get("stat_id")) if s.get("stat_id") is not None else None
+            if not sid:
+                continue
+            disp = s.get("display_name") or s.get("name") or f"stat_{sid}"
+            mapping[sid] = disp
+        return mapping
+    except Exception as e:
+        print(f"⚠️ Failed to fetch league settings/categories: {e}")
+        return {}
+
+
+def parse_player_stats_response(data: dict) -> dict:
+    """Parse Yahoo's league-scoped player stats response into a flat dict.
+    Returns a dict with player metadata and raw stats entries.
+    """
+    result = {
+        "player_key": None,
+        "name": None,
+        "team": None,
+        "positions": [],
+        "stats_type": None,
+        "week": None,
+        "stats": [],  # list of {stat_id, value}
+    }
+    try:
+        league = data.get("fantasy_content", {}).get("league", {})
+        players_node = league.get("players", {})
+        player_entry = players_node.get("player")
+
+        # Normalize to a single player dict
+        if isinstance(player_entry, list):
+            player = player_entry[0]
+        elif isinstance(player_entry, dict):
+            player = player_entry
+        else:
+            return result
+
+        # Player key & identity
+        result["player_key"] = player.get("player_key")
+        name_node = player.get("name", {})
+        if isinstance(name_node, dict):
+            result["name"] = name_node.get("full")
+        result["team"] = player.get("editorial_team_abbr")
+
+        # Positions (eligibility)
+        pos_node = player.get("eligible_positions")
+        if isinstance(pos_node, dict):
+            pos_list = pos_node.get("position")
+            if isinstance(pos_list, list):
+                result["positions"] = pos_list
+            elif isinstance(pos_list, str):
+                result["positions"] = [pos_list]
+
+        # Stats payload
+        ps = player.get("player_stats", {})
+        # Capture type & week selectors if present
+        result["stats_type"] = ps.get("coverage_type") or ps.get("stats", {}).get("coverage_type")
+        result["week"] = ps.get("week") or ps.get("stats", {}).get("week")
+
+        stats_node = ps.get("stats", {}).get("stat")
+        if stats_node:
+            if isinstance(stats_node, dict):
+                stats_node = [stats_node]
+            for s in stats_node:
+                sid = str(s.get("stat_id")) if s.get("stat_id") is not None else None
+                val = s.get("value")
+                # Some categories may return "-" for N/A; keep as-is to preserve fidelity
+                result["stats"].append({"stat_id": sid, "value": val})
+    except Exception as e:
+        print(f"⚠️ Error parsing player stats: {e}")
+    return result
+
+
+@app.route("/player", methods=["GET"])
+def get_player_stats():
+    """
+    Fetch a single player's stats in the context of a specific league.
+
+    Query params:
+      league_id   – Yahoo league ID (required; digits or full key like 461.l.XXXX)
+      player_key  – Yahoo player key (required; e.g., nfl.p.12345)
+      type        – optional stats coverage (e.g., season, week)
+      week        – optional week number (required if type=week)
+
+    Example:
+      /player?league_id=1157326&player_key=nfl.p.30199&type=week&week=6
+      /player?league_id=1157326&player_key=nfl.p.30199&type=season
+    """
+    # Extract & validate
+    raw_league_id = request.args.get("league_id")
+    player_key = request.args.get("player_key")
+    stats_type = request.args.get("type")
+    week = request.args.get("week")
+
+    if not raw_league_id or not player_key:
+        return jsonify({
+            "error": "league_id and player_key are required"
+        }), 400
+
+    league_id = normalize_league_id(raw_league_id)
+
+    # If type=week is specified but week is missing, return 400
+    if stats_type == "week" and not week:
+        return jsonify({
+            "error": "week is required when type=week"
+        }), 400
+
+    try:
+        # Build and fetch league-scoped player stats
+        url = build_player_stats_url(league_id, player_key, stats_type, week)
+        stats_data = fetch_yahoo(url)
+        if isinstance(stats_data, dict) and stats_data.get("error"):
+            return jsonify(stats_data), 502
+
+        # Parse raw stats first
+        parsed = parse_player_stats_response(stats_data)
+
+        # Enrich with stat category names from league settings (best-effort)
+        id_to_name = get_league_stat_categories(league_id)
+        enriched_stats = []
+        for s in parsed.get("stats", []):
+            sid = s.get("stat_id")
+            enriched_stats.append({
+                "stat_id": sid,
+                "stat_name": id_to_name.get(sid),
+                "value": s.get("value"),
+            })
+
+        response = {
+            "league_id": league_id,
+            "player_key": parsed.get("player_key") or player_key,
+            "name": parsed.get("name"),
+            "team": parsed.get("team"),
+            "positions": parsed.get("positions", []),
+            "stats_type": parsed.get("stats_type") or stats_type,
+            "week": parsed.get("week") or week,
+            "stats": enriched_stats,
+        }
+        return jsonify(response)
+    except Exception as e:
+        print(f"⚠️ Error in get_player_stats: {e}")
+        return jsonify({"error": "Failed to fetch player stats"}), 500
 
