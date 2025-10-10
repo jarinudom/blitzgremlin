@@ -235,15 +235,6 @@ def get_waivers():
 
     # Use the shared fetch_yahoo() helper — handles auth + errors automatically
     data = fetch_yahoo(yahoo_url)
-    
-    # 🧠 Debug log: show the raw Yahoo payload for inspection
-    import json
-    try:
-        print("========== RAW YAHOO RESPONSE ==========")
-        print(json.dumps(data, indent=2))
-        print("========================================")
-    except Exception as e:
-        print("⚠️ Error logging Yahoo raw data:", e)
 
     parsed_players = parse_yahoo_players_response(data)
     return jsonify({"count": len(parsed_players), "players": parsed_players})
