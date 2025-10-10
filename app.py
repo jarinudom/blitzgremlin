@@ -208,7 +208,7 @@ if __name__ == "__main__":
 # 🧠 Yahoo Waivers / Free Agents Endpoint
 ###############################################################
 
-@app.route("/yahoo/waivers", methods=["GET"])
+@app.route("/waivers", methods=["GET"])
 def get_waivers():
     """
     Fetch available players (waivers/free agents) filtered by position and status.
