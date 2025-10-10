@@ -372,6 +372,7 @@ def get_league_stat_categories(league_id: str) -> dict:
         return {}
 
 
+
 def parse_player_stats_response(data: dict) -> dict:
     """Parse Yahoo's league-scoped player stats response into a flat dict.
     Returns a dict with player metadata and raw stats entries.
@@ -434,73 +435,221 @@ def parse_player_stats_response(data: dict) -> dict:
     return result
 
 
-@app.route("/player", methods=["GET"])
-def get_player_stats():
+# ---- Unified helpers for single/multi player fetching ----
+
+def collect_player_keys_from_request(args) -> list[str]:
+    """Collect player keys from query args.
+    Supports:
+      - repeated `player_key=...&player_key=...`
+      - `player_keys` as comma-separated list
+    Returns a de-duplicated, order-preserved list.
     """
-    Fetch a single player's stats in the context of a specific league.
+    keys: list[str] = []
+    # repeated player_key
+    repeated = args.getlist("player_key") if hasattr(args, "getlist") else []
+    for k in repeated:
+        k = k.strip()
+        if k and k not in keys:
+            keys.append(k)
+    # comma-separated player_keys
+    csv = args.get("player_keys")
+    if csv:
+        for k in csv.split(","):
+            k = k.strip()
+            if k and k not in keys:
+                keys.append(k)
+    return keys
 
-    Query params:
-      league_id   – Yahoo league ID (required; digits or full key like 461.l.XXXX)
-      player_key  – Yahoo player key (required; e.g., nfl.p.12345)
-      type        – optional stats coverage (e.g., season, week)
-      week        – optional week number (required if type=week)
 
-    Example:
-      /player?league_id=1157326&player_key=nfl.p.30199&type=week&week=6
-      /player?league_id=1157326&player_key=nfl.p.30199&type=season
-    """
-    # Extract & validate
-    raw_league_id = request.args.get("league_id")
-    player_key = request.args.get("player_key")
-    stats_type = request.args.get("type")
-    week = request.args.get("week")
+def _fetch_players_stats(league_id: str, player_keys: list[str], stats_type: str | None, week: str | None) -> list[dict]:
+    """Fetch and enrich stats for one or more players in a league."""
+    url = build_multi_player_stats_url(league_id, player_keys, stats_type, week)
+    raw = fetch_yahoo(url)
+    if isinstance(raw, dict) and raw.get("error"):
+        # Bubble upstream error shape to caller by raising
+        raise RuntimeError(json.dumps(raw))
+    parsed_list = parse_multi_player_stats_response(raw)
+    id_to_name = get_league_stat_categories(league_id)
 
-    if not raw_league_id or not player_key:
-        return jsonify({
-            "error": "league_id and player_key are required"
-        }), 400
-
-    league_id = normalize_league_id(raw_league_id)
-
-    # If type=week is specified but week is missing, return 400
-    if stats_type == "week" and not week:
-        return jsonify({
-            "error": "week is required when type=week"
-        }), 400
-
-    try:
-        # Build and fetch league-scoped player stats
-        url = build_player_stats_url(league_id, player_key, stats_type, week)
-        stats_data = fetch_yahoo(url)
-        if isinstance(stats_data, dict) and stats_data.get("error"):
-            return jsonify(stats_data), 502
-
-        # Parse raw stats first
-        parsed = parse_player_stats_response(stats_data)
-
-        # Enrich with stat category names from league settings (best-effort)
-        id_to_name = get_league_stat_categories(league_id)
-        enriched_stats = []
+    enriched: list[dict] = []
+    for parsed in parsed_list:
+        stats = []
         for s in parsed.get("stats", []):
             sid = s.get("stat_id")
-            enriched_stats.append({
+            stats.append({
                 "stat_id": sid,
                 "stat_name": id_to_name.get(sid),
                 "value": s.get("value"),
             })
-
-        response = {
+        enriched.append({
             "league_id": league_id,
-            "player_key": parsed.get("player_key") or player_key,
+            "player_key": parsed.get("player_key"),
             "name": parsed.get("name"),
             "team": parsed.get("team"),
             "positions": parsed.get("positions", []),
             "stats_type": parsed.get("stats_type") or stats_type,
             "week": parsed.get("week") or week,
-            "stats": enriched_stats,
-        }
-        return jsonify(response)
+            "stats": stats,
+        })
+    return enriched
+
+
+@app.route("/player", methods=["GET"])
+def get_player_stats():
+    """
+    Get one or more players' stats in the context of a specific league.
+
+    Query params:
+      league_id    – Yahoo league ID (required; digits or full key like 461.l.XXXX)
+      player_key   – optional; repeatable key(s), e.g., player_key=nfl.p.30199&player_key=nfl.p.12345
+      player_keys  – optional; comma-separated keys, e.g., nfl.p.30199,nfl.p.12345
+      type         – optional; season or week
+      week         – optional; required if type=week
+
+    Returns:
+      {"count": <n>, "players": [ PlayerStatsPayload, ... ]}
+    """
+    # Extract & validate
+    raw_league_id = request.args.get("league_id")
+    stats_type = request.args.get("type")
+    week = request.args.get("week")
+
+    player_keys = collect_player_keys_from_request(request.args)
+
+    if not raw_league_id:
+        return jsonify({"error": "league_id is required"}), 400
+    if not player_keys:
+        return jsonify({"error": "Provide player_key (repeatable) and/or player_keys (comma-separated)"}), 400
+
+    league_id = normalize_league_id(raw_league_id)
+
+    if stats_type == "week" and not week:
+        return jsonify({"error": "week is required when type=week"}), 400
+
+    try:
+        enriched = _fetch_players_stats(league_id, player_keys, stats_type, week)
+        return jsonify({"count": len(enriched), "players": enriched})
+    except RuntimeError as upstream:
+        # Upstream Yahoo error bubbled as JSON string; attempt to parse
+        try:
+            return jsonify(json.loads(str(upstream))), 502
+        except Exception:
+            return jsonify({"error": "Upstream error"}), 502
     except Exception as e:
         print(f"⚠️ Error in get_player_stats: {e}")
         return jsonify({"error": "Failed to fetch player stats"}), 500
+
+
+###############################################################
+# 👥 Multi-Player Stats + OpenAPI spec
+###############################################################
+
+def build_multi_player_stats_url(league_id: str, player_keys: list[str], stats_type: str | None, week: str | None) -> str:
+    """Build Yahoo API URL for multiple players in a league context."""
+    joined = ",".join(player_keys)
+    resource = f"league/{league_id}/players;player_keys={joined}/stats"
+    if stats_type:
+        resource += f";type={stats_type}"
+    if week:
+        resource += f";week={week}"
+    return f"{YAHOO_BASE_URL}/{resource}"
+
+
+def parse_multi_player_stats_response(data: dict) -> list[dict]:
+    """Parse Yahoo response where league->players->player can be a list of players."""
+    results: list[dict] = []
+    try:
+        league = data.get("fantasy_content", {}).get("league", {})
+        players_node = league.get("players", {})
+        player_entries = players_node.get("player")
+        if not player_entries:
+            return results
+        # Normalize to list
+        if isinstance(player_entries, dict):
+            player_entries = [player_entries]
+        for entry in player_entries:
+            # Reuse single-player parser by wrapping the shape the same way
+            wrapped = {
+                "fantasy_content": {
+                    "league": {"players": {"player": entry}}
+                }
+            }
+            results.append(parse_player_stats_response(wrapped))
+    except Exception as e:
+        print(f"⚠️ Error parsing multi-player stats: {e}")
+    return results
+
+
+
+
+# Only /player endpoint is documented in OpenAPI spec.
+@app.route("/openapi.json", methods=["GET"])
+def openapi_spec():
+    """Serve a minimal OpenAPI 3.0 spec for the unified /player endpoint."""
+    spec = {
+        "openapi": "3.0.3",
+        "info": {
+            "title": "BlitzGremlin Fantasy API",
+            "version": "1.0.0",
+            "description": "Yahoo Fantasy league-scoped player stats endpoints"
+        },
+        "paths": {
+            "/player": {
+                "get": {
+                    "summary": "Get one or more players' stats (league-scoped)",
+                    "parameters": [
+                        {"name": "league_id", "in": "query", "required": True, "schema": {"type": "string"}},
+                        {"name": "player_key", "in": "query", "required": False, "schema": {"type": "string"}, "description": "Repeatable. Provide one or more player_key params."},
+                        {"name": "player_keys", "in": "query", "required": False, "schema": {"type": "string"}, "description": "Comma-separated Yahoo player keys."},
+                        {"name": "type", "in": "query", "required": False, "schema": {"type": "string", "enum": ["season", "week"]}},
+                        {"name": "week", "in": "query", "required": False, "schema": {"type": "string"}}
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "OK",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/PlayersStatsResponse"}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "components": {
+            "schemas": {
+                "EnrichedStat": {
+                    "type": "object",
+                    "properties": {
+                        "stat_id": {"type": "string"},
+                        "stat_name": {"type": ["string", "null"]},
+                        "value": {"type": ["string", "number", "null"]}
+                    }
+                },
+                "PlayerStatsPayload": {
+                    "type": "object",
+                    "properties": {
+                        "league_id": {"type": "string"},
+                        "player_key": {"type": "string"},
+                        "name": {"type": ["string", "null"]},
+                        "team": {"type": ["string", "null"]},
+                        "positions": {"type": "array", "items": {"type": "string"}},
+                        "stats_type": {"type": ["string", "null"]},
+                        "week": {"type": ["string", "null"]},
+                        "stats": {"type": "array", "items": {"$ref": "#/components/schemas/EnrichedStat"}}
+                    }
+                },
+                "PlayerStatsResponse": {"$ref": "#/components/schemas/PlayerStatsPayload"},
+                "PlayersStatsResponse": {
+                    "type": "object",
+                    "properties": {
+                        "count": {"type": "integer"},
+                        "players": {"type": "array", "items": {"$ref": "#/components/schemas/PlayerStatsPayload"}}
+                    }
+                }
+            }
+        }
+    }
+    return jsonify(spec)
 
