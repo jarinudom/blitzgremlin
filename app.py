@@ -208,6 +208,74 @@ if __name__ == "__main__":
 # 🧠 Yahoo Waivers / Free Agents Endpoint
 ###############################################################
 
+# Constants for waivers endpoint
+VALID_POSITIONS = {"QB", "RB", "WR", "TE", "DEF", "K"}
+VALID_STATUSES = {"A", "FA", "W"}
+DEFAULT_POSITION = "ALL"
+DEFAULT_STATUS = "A"
+YAHOO_BASE_URL = "https://fantasysports.yahooapis.com/fantasy/v2"
+
+def validate_waivers_params(league_id: str, position: str, status: str) -> tuple[bool, str]:
+    """Validate waivers endpoint parameters and return (is_valid, error_message)."""
+    if not league_id:
+        return False, "league_id is required"
+    
+    if position != DEFAULT_POSITION and position not in VALID_POSITIONS:
+        return False, f"Invalid position '{position}'. Must be one of: {', '.join(VALID_POSITIONS)}"
+    
+    if status not in VALID_STATUSES:
+        return False, f"Invalid status '{status}'. Must be one of: {', '.join(VALID_STATUSES)}"
+    
+    return True, ""
+
+def build_waivers_url(league_id: str, position: str, status: str) -> str:
+    """Build the Yahoo API URL for fetching waivers/free agents."""
+    resource_path = f"league/{league_id}/players;status={status}"
+    if position != DEFAULT_POSITION:
+        resource_path += f";position={position}"
+    return f"{YAHOO_BASE_URL}/{resource_path}"
+
+def extract_player_info(player_data: dict) -> dict:
+    """Extract relevant player information from Yahoo player data."""
+    name_info = player_data.get("name", {})
+    return {
+        "player_key": player_data.get("player_key"),
+        "name": name_info.get("full"),
+        "team": player_data.get("editorial_team_abbr"),
+        "position": player_data.get("primary_position"),
+        "status": player_data.get("status", "FA"),
+    }
+
+def parse_yahoo_players_response(data: dict) -> list[dict]:
+    """Parse Yahoo's Players Collection into a clean, flat list of player dictionaries."""
+    players = []
+    
+    try:
+        league = data.get("fantasy_content", {}).get("league", {})
+        players_data = league.get("players", {})
+        player_entries = players_data.get("player")
+        
+        if not player_entries:
+            return players
+        
+        # Handle both list and dict formats from Yahoo API
+        if isinstance(player_entries, list):
+            # Direct list of players
+            for player_data in player_entries:
+                players.append(extract_player_info(player_data))
+        elif isinstance(player_entries, dict):
+            # Keyed dictionary format
+            for value in player_entries.values():
+                if isinstance(value, dict) and "player" in value:
+                    player_data = value["player"][0] if isinstance(value["player"], list) else value["player"]
+                    players.append(extract_player_info(player_data))
+                    
+    except Exception as e:
+        print(f"⚠️ Error parsing Yahoo player data: {e}")
+        # Return empty list instead of raising to maintain API stability
+    
+    return players
+
 @app.route("/waivers", methods=["GET"])
 def get_waivers():
     """
@@ -217,64 +285,40 @@ def get_waivers():
       league_id  – Yahoo league ID (required)
       position   – QB, RB, WR, TE, DEF, K (optional, defaults to ALL)
       status     – A (all available), FA (free agents), W (waivers) (optional, defaults to A)
+    
+    Returns:
+      JSON response with count and list of players
     """
-
+    # Extract and normalize parameters
     league_id = normalize_league_id(request.args.get("league_id"))
-    position = request.args.get("position", "ALL")
-    status = request.args.get("status", "A")
-
-    if not league_id:
-        return jsonify({"error": "league_id is required"}), 400
-
-    # Build Yahoo Players Collection endpoint
-    resource_path = f"league/{league_id}/players;status={status}"
-    if position and position != "ALL":
-        resource_path += f";position={position}"
-
-    yahoo_url = f"https://fantasysports.yahooapis.com/fantasy/v2/{resource_path}"
-
-    # Use the shared fetch_yahoo() helper — handles auth + errors automatically
-    data = fetch_yahoo(yahoo_url)
-
-    parsed_players = parse_yahoo_players_response(data)
-    return jsonify({"count": len(parsed_players), "players": parsed_players})
-
-
-def parse_yahoo_players_response(data):
-    """Parse Yahoo's Players Collection into a clean, flat list using player_key."""
-    players = []
+    position = request.args.get("position", DEFAULT_POSITION)
+    status = request.args.get("status", DEFAULT_STATUS)
+    
+    # Validate parameters
+    is_valid, error_message = validate_waivers_params(league_id, position, status)
+    if not is_valid:
+        return jsonify({"error": error_message}), 400
+    
     try:
-        league = data.get("fantasy_content", {}).get("league", {})
-        players_data = league.get("players", {})
-
-        # Yahoo may return "player" as a list or keyed dict
-        player_entries = players_data.get("player")
-
-        if isinstance(player_entries, list):
-            for p in player_entries:
-                name_info = p.get("name", {})
-                players.append({
-                    "player_key": p.get("player_key"),
-                    "name": name_info.get("full"),
-                    "team": p.get("editorial_team_abbr"),
-                    "position": p.get("primary_position"),
-                    "status": p.get("status", "FA"),
-                })
-        elif isinstance(players_data, dict):
-            for _, value in players_data.items():
-                if isinstance(value, dict) and "player" in value:
-                    p = value["player"][0]
-                    name_info = p.get("name", {})
-                    players.append({
-                        "player_key": p.get("player_key"),
-                        "name": name_info.get("full"),
-                        "team": p.get("editorial_team_abbr"),
-                        "position": p.get("primary_position"),
-                        "status": p.get("status", "FA"),
-                    })
-
+        # Build API URL and fetch data
+        yahoo_url = build_waivers_url(league_id, position, status)
+        data = fetch_yahoo(yahoo_url)
+        
+        # Check for API errors
+        if "error" in data:
+            return jsonify(data), 500
+        
+        # Parse and return player data
+        parsed_players = parse_yahoo_players_response(data)
+        return jsonify({
+            "league_id": league_id,
+            "position": position,
+            "status": status,
+            "count": len(parsed_players),
+            "players": parsed_players
+        })
+        
     except Exception as e:
-        print(f"⚠️ Error parsing Yahoo player data: {e}")
-
-    return players
+        print(f"⚠️ Error in get_waivers: {e}")
+        return jsonify({"error": "Failed to fetch waivers data"}), 500
 
