@@ -3,15 +3,7 @@ import json
 import time
 import requests
 import xmltodict
-from flask import Flask, redirect, request, session, jsonify, redirect
-from yahoo_client import (
-    get_auth_url,
-    ensure_league_key,
-    current_week,
-    league_metadata,
-    team_roster_with_stats,
-    league_free_agents,
-)
+from flask import Flask, redirect, request, session, jsonify
 from requests_oauthlib import OAuth2Session
 
 app = Flask(__name__)
@@ -661,35 +653,3 @@ def openapi_spec():
     }
     return jsonify(spec)
 
-
-
-# ---- Yahoo OAuth bootstrap ---------------------------------------------------
-@app.route("/auth/start")
-def auth_start():
-    return redirect(get_auth_url())
-
-@app.route("/auth/callback")
-def auth_callback():
-    try:
-        key = ensure_league_key()
-        return jsonify({"ok": True, "league_key": key})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
-
-# ---- Example API routes using YFPY -------------------------------------------
-@app.route("/league/meta")
-def api_league_meta():
-    return jsonify(league_metadata())
-
-@app.route("/team/<team_id>/roster")
-def api_team_roster(team_id):
-    wk = request.args.get("week", type=int) or current_week()
-    data = team_roster_with_stats(team_id=team_id, week=wk)
-    return jsonify({"week": wk, "team_id": team_id, "players": data})
-
-@app.route("/free_agents")
-def api_free_agents():
-    limit = request.args.get("limit", 100, type=int)
-    position = request.args.get("position")
-    data = league_free_agents(limit=limit, position=position)
-    return jsonify({"count": len(data), "players": data})
