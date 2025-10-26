@@ -4,3 +4,5 @@ requests-oauthlib
 gunicorn
 xmltodict
 
+
+yfpy>=17.0.0
