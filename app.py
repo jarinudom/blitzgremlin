@@ -205,6 +205,142 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 
 ###############################################################
+# 🏈 Player Model
+###############################################################
+
+class Player:
+    """Represents a fantasy football player from Yahoo Fantasy API.
+    
+    This class can be extended with additional attributes and methods as needed.
+    """
+    
+    def __init__(
+        self,
+        player_key: str | None = None,
+        player_id: str | None = None,
+        name: str | None = None,
+        team: str | None = None,
+        position: str | None = None,
+        primary_position: str | None = None,
+        display_position: str | None = None,
+        status: str | None = None,
+        bye_week: str | int | None = None,
+        slot: str | None = None,
+        eligible_positions: list[str] | None = None,
+        **kwargs  # Allow for future extensibility
+    ):
+        """Initialize a Player instance.
+        
+        Args:
+            player_key: Yahoo player key (e.g., "nfl.p.30199")
+            player_id: Yahoo player ID
+            name: Player's full name
+            team: Team abbreviation (e.g., "SF")
+            position: Primary position
+            primary_position: Primary position (alternative field)
+            display_position: Display position
+            status: Player status (FA, W, etc.)
+            bye_week: Bye week number
+            slot: Current roster slot
+            eligible_positions: List of eligible positions
+            **kwargs: Additional attributes for future expansion
+        """
+        self.player_key = player_key
+        self.player_id = player_id
+        self.name = name
+        self.team = team
+        self.position = position or primary_position or display_position
+        self.primary_position = primary_position or position
+        self.display_position = display_position
+        self.status = status
+        self.bye_week = bye_week
+        self.slot = slot
+        self.eligible_positions = eligible_positions or []
+        
+        # Store any additional kwargs as attributes for extensibility
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+    
+    @classmethod
+    def from_yahoo_data(cls, player_data: dict) -> "Player":
+        """Create a Player instance from Yahoo API player data.
+        
+        Args:
+            player_data: Raw player dictionary from Yahoo API
+            
+        Returns:
+            Player instance
+        """
+        name_info = player_data.get("name", {})
+        if isinstance(name_info, dict):
+            name = name_info.get("full")
+        else:
+            name = name_info
+        
+        bye_weeks = player_data.get("bye_weeks", {})
+        bye_week = bye_weeks.get("week") if isinstance(bye_weeks, dict) else None
+        
+        selected_position = player_data.get("selected_position", {})
+        slot = selected_position.get("position") if isinstance(selected_position, dict) else None
+        
+        eligible_positions = player_data.get("eligible_positions", {})
+        if isinstance(eligible_positions, dict):
+            positions = eligible_positions.get("position", [])
+            if isinstance(positions, str):
+                positions = [positions]
+        else:
+            positions = []
+        
+        return cls(
+            player_key=player_data.get("player_key"),
+            player_id=player_data.get("player_id"),
+            name=name,
+            team=player_data.get("editorial_team_abbr"),
+            position=player_data.get("primary_position"),
+            primary_position=player_data.get("primary_position"),
+            display_position=player_data.get("display_position"),
+            status=player_data.get("status", "FA"),
+            bye_week=bye_week,
+            slot=slot,
+            eligible_positions=positions
+        )
+    
+    def to_dict(self) -> dict:
+        """Convert Player instance to dictionary for JSON serialization.
+        
+        Returns:
+            Dictionary representation of the player
+        """
+        result = {
+            "player_key": self.player_key,
+            "name": self.name,
+            "team": self.team,
+            "position": self.position,
+            "status": self.status,
+        }
+        
+        # Add optional fields if they exist
+        if self.player_id is not None:
+            result["player_id"] = self.player_id
+        if self.primary_position is not None and self.primary_position != self.position:
+            result["primary_position"] = self.primary_position
+        if self.display_position is not None:
+            result["display_position"] = self.display_position
+        if self.bye_week is not None:
+            result["bye_week"] = self.bye_week
+        if self.slot is not None:
+            result["slot"] = self.slot
+        if self.eligible_positions:
+            result["eligible_positions"] = self.eligible_positions
+        
+        return result
+    
+    def __repr__(self) -> str:
+        """String representation of the Player."""
+        return f"Player(key={self.player_key}, name={self.name}, position={self.position}, team={self.team})"
+
+
+###############################################################
 # 🧠 Yahoo Waivers / Free Agents Endpoint
 ###############################################################
 
@@ -235,19 +371,12 @@ def build_waivers_url(league_id: str, position: str, status: str) -> str:
         resource_path += f";position={position}"
     return f"{YAHOO_BASE_URL}/{resource_path}"
 
-def extract_player_info(player_data: dict) -> dict:
-    """Extract relevant player information from Yahoo player data."""
-    name_info = player_data.get("name", {})
-    return {
-        "player_key": player_data.get("player_key"),
-        "name": name_info.get("full"),
-        "team": player_data.get("editorial_team_abbr"),
-        "position": player_data.get("primary_position"),
-        "status": player_data.get("status", "FA"),
-    }
+def extract_player_info(player_data: dict) -> Player:
+    """Extract relevant player information from Yahoo player data and return a Player instance."""
+    return Player.from_yahoo_data(player_data)
 
-def parse_yahoo_players_response(data: dict) -> list[dict]:
-    """Parse Yahoo's Players Collection into a clean, flat list of player dictionaries."""
+def parse_yahoo_players_response(data: dict) -> list[Player]:
+    """Parse Yahoo's Players Collection into a clean, flat list of Player objects."""
     players = []
     
     try:
@@ -262,13 +391,13 @@ def parse_yahoo_players_response(data: dict) -> list[dict]:
         if isinstance(player_entries, list):
             # Direct list of players
             for player_data in player_entries:
-                players.append(extract_player_info(player_data))
+                players.append(Player.from_yahoo_data(player_data))
         elif isinstance(player_entries, dict):
             # Keyed dictionary format
             for value in player_entries.values():
                 if isinstance(value, dict) and "player" in value:
                     player_data = value["player"][0] if isinstance(value["player"], list) else value["player"]
-                    players.append(extract_player_info(player_data))
+                    players.append(Player.from_yahoo_data(player_data))
                     
     except Exception as e:
         print(f"⚠️ Error parsing Yahoo player data: {e}")
@@ -316,7 +445,7 @@ def get_waivers():
             "position": position,
             "status": status,
             "count": len(parsed_players),
-            "players": parsed_players
+            "players": [player.to_dict() for player in parsed_players]
         })
         
     except Exception as e:
