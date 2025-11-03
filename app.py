@@ -144,7 +144,54 @@ def get_teams(league_id):
 @app.route("/roster/<team_key>")
 def get_roster(team_key):
     url = f"https://fantasysports.yahooapis.com/fantasy/v2/team/{team_key}/roster"
-    return jsonify(fetch_yahoo(url))
+    data = fetch_yahoo(url)
+    
+    # Check for errors
+    if isinstance(data, dict) and data.get("error"):
+        return jsonify(data), 500
+    
+    # Extract league_id from team_key (format: "461.l.XXXX.t.Y")
+    # Try to parse team_key to get league_id
+    league_id = None
+    try:
+        if "." in team_key:
+            parts = team_key.split(".")
+            if len(parts) >= 3:
+                # Reconstruct league_id from team_key (e.g., "461.l.XXXX" from "461.l.XXXX.t.Y")
+                league_id = ".".join(parts[:3])
+    except Exception:
+        pass
+    
+    # Try to parse and enrich with stats if league_id is available
+    if league_id:
+        try:
+            # Parse roster data to extract players
+            teams = data.get("fantasy_content", {}).get("team", {})
+            roster = teams.get("roster", {})
+            players_data = roster.get("players", {})
+            player_entries = players_data.get("player")
+            
+            if player_entries:
+                players = []
+                player_list = player_entries if isinstance(player_entries, list) else [player_entries]
+                
+                for p in player_list:
+                    player_obj = Player.from_yahoo_data(p)
+                    player_dict = player_obj.to_dict(include_stats=True, league_id=league_id)
+                    players.append(player_dict)
+                
+                if players:
+                    return jsonify({
+                        "team_key": team_key,
+                        "league_id": league_id,
+                        "count": len(players),
+                        "players": players,
+                        "raw": data  # Include raw data for reference
+                    })
+        except Exception as e:
+            print(f"⚠️ Error parsing roster with stats: {e}")
+    
+    return jsonify(data)
 
 @app.route("/all-rosters/<league_id>")
 def all_rosters(league_id):
@@ -165,17 +212,27 @@ def all_rosters(league_id):
 
             simplified_players = []
             for p in players:
-                simplified_players.append({
+                # Create Player object to use its methods
+                player_obj = Player.from_yahoo_data(p)
+                player_dict = player_obj.to_dict(include_stats=True, league_id=league_id)
+                
+                # Add additional fields that might not be in to_dict
+                player_dict.update({
                     "player_id": p.get("player_id"),
-                    "player_key": p.get("player_key"),
-                    "name": p.get("name", {}).get("full"),
-                    "position": p.get("display_position"),
-                    "primary_position": p.get("primary_position"),
                     "team_abbr": p.get("editorial_team_abbr"),
-                    "bye_week": p.get("bye_weeks", {}).get("week"),
-                    "slot": p.get("selected_position", {}).get("position"),
-                    "status": p.get("status")
                 })
+                
+                # Preserve original field names for backward compatibility
+                if "position" not in player_dict:
+                    player_dict["position"] = p.get("display_position")
+                if "primary_position" not in player_dict:
+                    player_dict["primary_position"] = p.get("primary_position")
+                if "bye_week" not in player_dict:
+                    player_dict["bye_week"] = p.get("bye_weeks", {}).get("week")
+                if "slot" not in player_dict:
+                    player_dict["slot"] = p.get("selected_position", {}).get("position")
+                
+                simplified_players.append(player_dict)
 
             simplified.append({
                 "team_key": team.get("team_key"),
@@ -195,7 +252,27 @@ def available_players(league_id):
     params = request.args.to_dict()
     filters = ";".join([f"{k}={v}" for k, v in params.items()])
     url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/players{';' + filters if filters else ''}"
-    return jsonify(fetch_yahoo(url))
+    data = fetch_yahoo(url)
+    
+    # Check for errors
+    if isinstance(data, dict) and data.get("error"):
+        return jsonify(data), 500
+    
+    # Try to parse and enrich with stats if possible
+    try:
+        parsed_players = parse_yahoo_players_response(data)
+        if parsed_players:
+            return jsonify({
+                "league_id": league_id,
+                "count": len(parsed_players),
+                "players": [player.to_dict(include_stats=True, league_id=league_id) for player in parsed_players],
+                "raw": data  # Include raw data for reference
+            })
+    except Exception as e:
+        print(f"⚠️ Error parsing available players: {e}")
+        # Fall back to raw response if parsing fails
+    
+    return jsonify(data)
 
 # -------------------------------
 # Run
@@ -257,6 +334,10 @@ class Player:
         self.slot = slot
         self.eligible_positions = eligible_positions or []
         
+        # Cache for player stats (cache_key: {"stats": {...}, "timestamp": float})
+        self._stats_cache: dict[str, dict] = {}
+        self._cache_ttl = 3600  # 1 hour in seconds
+        
         # Store any additional kwargs as attributes for extensibility
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -305,11 +386,16 @@ class Player:
             eligible_positions=positions
         )
     
-    def to_dict(self) -> dict:
+    def to_dict(self, include_stats: bool = False, league_id: str | None = None, stats_type: str | None = None) -> dict:
         """Convert Player instance to dictionary for JSON serialization.
         
+        Args:
+            include_stats: If True, include player stats in the output (requires league_id)
+            league_id: League ID needed when include_stats is True
+            stats_type: Optional stats type ("season" or "week") when including stats
+        
         Returns:
-            Dictionary representation of the player
+            Dictionary representation of the player, optionally with stats
         """
         result = {
             "player_key": self.player_key,
@@ -333,7 +419,119 @@ class Player:
         if self.eligible_positions:
             result["eligible_positions"] = self.eligible_positions
         
+        # Include stats if requested and league_id is provided
+        if include_stats and league_id:
+            try:
+                stats = self.get_stats(league_id, stats_type=stats_type)
+                if stats:
+                    # Only include the stats array, not the full stats response metadata
+                    result["stats"] = stats.get("stats", [])
+                    result["stats_type"] = stats.get("stats_type")
+                    if stats.get("week"):
+                        result["week"] = stats.get("week")
+            except Exception as e:
+                print(f"⚠️ Error including stats for player {self.player_key}: {e}")
+                # Continue without stats if there's an error
+        
         return result
+    
+    def get_stats(
+        self,
+        league_id: str,
+        stats_type: str | None = None,
+        week: str | None = None,
+        force_refresh: bool = False
+    ) -> dict | None:
+        """Fetch player stats for a given league with 1-hour caching.
+        
+        Args:
+            league_id: Yahoo league ID (will be normalized)
+            stats_type: Optional; "season" or "week"
+            week: Optional; required if stats_type is "week"
+            force_refresh: If True, bypass cache and fetch fresh data
+        
+        Returns:
+            Dictionary with enriched stats including stat names, or None if error
+        """
+        if not self.player_key:
+            print("⚠️ Player key is required to fetch stats")
+            return None
+        
+        # Normalize league_id
+        normalized_league_id = normalize_league_id(league_id)
+        
+        # Create cache key from parameters
+        cache_key = f"{normalized_league_id}_{stats_type or 'season'}_{week or 'all'}"
+        
+        # Check cache if not forcing refresh
+        if not force_refresh and cache_key in self._stats_cache:
+            cached_data = self._stats_cache[cache_key]
+            cache_age = time.time() - cached_data.get("timestamp", 0)
+            
+            if cache_age < self._cache_ttl:
+                # Cache is still valid
+                return cached_data.get("stats")
+        
+        # Cache miss or expired - fetch fresh data
+        try:
+            # Build URL and fetch stats
+            url = build_player_stats_url(normalized_league_id, self.player_key, stats_type, week)
+            data = fetch_yahoo(url)
+            
+            if isinstance(data, dict) and data.get("error"):
+                print(f"⚠️ Error fetching stats: {data.get('error')}")
+                return None
+            
+            # Parse the response
+            parsed_stats = parse_player_stats_response(data)
+            
+            # Get league stat categories for enrichment
+            stat_categories = get_league_stat_categories(normalized_league_id)
+            
+            # Enrich stats with stat names
+            enriched_stats = []
+            for stat in parsed_stats.get("stats", []):
+                stat_id = stat.get("stat_id")
+                enriched_stats.append({
+                    "stat_id": stat_id,
+                    "stat_name": stat_categories.get(stat_id),
+                    "value": stat.get("value"),
+                })
+            
+            # Build enriched result
+            result = {
+                "league_id": normalized_league_id,
+                "player_key": self.player_key,
+                "name": parsed_stats.get("name") or self.name,
+                "team": parsed_stats.get("team") or self.team,
+                "positions": parsed_stats.get("positions", []),
+                "stats_type": parsed_stats.get("stats_type") or stats_type,
+                "week": parsed_stats.get("week") or week,
+                "stats": enriched_stats,
+            }
+            
+            # Store in cache with timestamp
+            self._stats_cache[cache_key] = {
+                "stats": result,
+                "timestamp": time.time()
+            }
+            
+            return result
+            
+        except Exception as e:
+            print(f"⚠️ Error fetching player stats for {self.player_key}: {e}")
+            return None
+    
+    def clear_stats_cache(self, cache_key: str | None = None):
+        """Clear stats cache.
+        
+        Args:
+            cache_key: Optional specific cache key to clear. If None, clears all.
+        """
+        if cache_key:
+            self._stats_cache.pop(cache_key, None)
+        else:
+            self._stats_cache.clear()
     
     def __repr__(self) -> str:
         """String representation of the Player."""
@@ -445,7 +643,7 @@ def get_waivers():
             "position": position,
             "status": status,
             "count": len(parsed_players),
-            "players": [player.to_dict() for player in parsed_players]
+            "players": [player.to_dict(include_stats=True, league_id=league_id) for player in parsed_players]
         })
         
     except Exception as e:
