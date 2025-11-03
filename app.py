@@ -890,35 +890,117 @@ def collect_player_keys_from_request(args) -> list[str]:
 
 
 def _fetch_players_stats(league_id: str, player_keys: list[str], stats_type: str | None, week: str | None) -> list[dict]:
-    """Fetch and enrich stats for one or more players in a league."""
-    url = build_multi_player_stats_url(league_id, player_keys, stats_type, week)
-    raw = fetch_yahoo(url)
-    if isinstance(raw, dict) and raw.get("error"):
-        # Bubble upstream error shape to caller by raising
-        raise RuntimeError(json.dumps(raw))
-    parsed_list = parse_multi_player_stats_response(raw)
-    id_to_name = get_league_stat_categories(league_id)
+    """Fetch and enrich stats for one or more players in a league.
+    
+    If batch request fails due to invalid player keys, will attempt individual requests
+    for valid players.
+    """
+    if not player_keys:
+        return []
+    
+    # Try batch request first
+    try:
+        url = build_multi_player_stats_url(league_id, player_keys, stats_type, week)
+        raw = fetch_yahoo(url)
+        if isinstance(raw, dict) and raw.get("error"):
+            # Check if error mentions invalid player keys
+            error = raw.get("error", {})
+            error_desc = error.get("description", "") if isinstance(error, dict) else ""
+            
+            # If error mentions invalid player keys, try individual requests
+            if "does not exist" in error_desc or "invalid" in error_desc.lower():
+                logger.warning(f"Batch request failed with invalid player keys, trying individual requests: {error_desc}")
+                return _fetch_players_stats_individual(league_id, player_keys, stats_type, week)
+            
+            # For other errors, raise as before
+            raise RuntimeError(json.dumps(raw))
+        
+        # Successfully parsed batch response
+        parsed_list = parse_multi_player_stats_response(raw)
+        id_to_name = get_league_stat_categories(league_id)
 
-    enriched: list[dict] = []
-    for parsed in parsed_list:
-        stats = []
-        for s in parsed.get("stats", []):
-            sid = s.get("stat_id")
-            stats.append({
-                "stat_id": sid,
-                "stat_name": id_to_name.get(sid),
-                "value": s.get("value"),
+        enriched: list[dict] = []
+        for parsed in parsed_list:
+            stats = []
+            for s in parsed.get("stats", []):
+                sid = s.get("stat_id")
+                stats.append({
+                    "stat_id": sid,
+                    "stat_name": id_to_name.get(sid),
+                    "value": s.get("value"),
+                })
+            enriched.append({
+                "league_id": league_id,
+                "player_key": parsed.get("player_key"),
+                "name": parsed.get("name"),
+                "team": parsed.get("team"),
+                "positions": parsed.get("positions", []),
+                "stats_type": parsed.get("stats_type") or stats_type,
+                "week": parsed.get("week") or week,
+                "stats": stats,
             })
-        enriched.append({
-            "league_id": league_id,
-            "player_key": parsed.get("player_key"),
-            "name": parsed.get("name"),
-            "team": parsed.get("team"),
-            "positions": parsed.get("positions", []),
-            "stats_type": parsed.get("stats_type") or stats_type,
-            "week": parsed.get("week") or week,
-            "stats": stats,
-        })
+        return enriched
+        
+    except requests.exceptions.HTTPError as e:
+        # Check if it's a 400 error that might indicate invalid player keys
+        if e.response.status_code == 400:
+            try:
+                error_data = xmltodict.parse(e.response.content)
+                error = error_data.get("error", {})
+                error_desc = error.get("description", "") if isinstance(error, dict) else ""
+                
+                if "does not exist" in error_desc or "invalid" in error_desc.lower():
+                    logger.warning(f"Batch request HTTP 400 with invalid player keys, trying individual requests: {error_desc}")
+                    return _fetch_players_stats_individual(league_id, player_keys, stats_type, week)
+            except Exception:
+                pass
+        
+        # Re-raise if we can't handle it
+        raise
+
+def _fetch_players_stats_individual(league_id: str, player_keys: list[str], stats_type: str | None, week: str | None) -> list[dict]:
+    """Fetch stats for players one at a time, skipping invalid player keys.
+    
+    Returns stats only for players that exist and can be fetched successfully.
+    """
+    id_to_name = get_league_stat_categories(league_id)
+    enriched: list[dict] = []
+    
+    for player_key in player_keys:
+        try:
+            url = build_player_stats_url(league_id, player_key, stats_type, week)
+            raw = fetch_yahoo(url)
+            
+            if isinstance(raw, dict) and raw.get("error"):
+                logger.warning(f"Skipping invalid player_key: {player_key} - {raw.get('error', {}).get('description', 'Unknown error')}")
+                continue
+            
+            parsed = parse_player_stats_response(raw)
+            
+            # Only add if we got valid stats
+            if parsed.get("player_key"):
+                stats = []
+                for s in parsed.get("stats", []):
+                    sid = s.get("stat_id")
+                    stats.append({
+                        "stat_id": sid,
+                        "stat_name": id_to_name.get(sid),
+                        "value": s.get("value"),
+                    })
+                enriched.append({
+                    "league_id": league_id,
+                    "player_key": parsed.get("player_key"),
+                    "name": parsed.get("name"),
+                    "team": parsed.get("team"),
+                    "positions": parsed.get("positions", []),
+                    "stats_type": parsed.get("stats_type") or stats_type,
+                    "week": parsed.get("week") or week,
+                    "stats": stats,
+                })
+        except Exception as e:
+            logger.warning(f"Skipping player_key {player_key} due to error: {e}")
+            continue
+    
     return enriched
 
 def batch_fetch_player_stats(players: list[Player], league_id: str, stats_type: str | None = None, week: str | None = None) -> dict[str, dict]:
@@ -1008,7 +1090,25 @@ def get_player_stats():
 
     try:
         enriched = _fetch_players_stats(league_id, player_keys, stats_type, week)
-        return jsonify({"count": len(enriched), "players": enriched})
+        
+        # Check if we got results for all requested players
+        returned_keys = {p.get("player_key") for p in enriched if p.get("player_key")}
+        requested_keys = set(player_keys)
+        missing_keys = requested_keys - returned_keys
+        
+        response = {
+            "count": len(enriched),
+            "players": enriched
+        }
+        
+        # Add warning if some players were skipped
+        if missing_keys:
+            response["warnings"] = {
+                "skipped_players": list(missing_keys),
+                "message": f"Could not fetch stats for {len(missing_keys)} player(s). They may not exist or may not have stats available."
+            }
+        
+        return jsonify(response)
     except RuntimeError as upstream:
         # Upstream Yahoo error bubbled as JSON string; attempt to parse
         try:
@@ -1016,7 +1116,7 @@ def get_player_stats():
         except Exception:
             return jsonify({"error": "Upstream error"}), 502
     except Exception as e:
-        print(f"⚠️ Error in get_player_stats: {e}")
+        logger.error(f"Error in get_player_stats: {e}")
         return jsonify({"error": "Failed to fetch player stats"}), 500
 
 
