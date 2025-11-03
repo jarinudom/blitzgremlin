@@ -403,14 +403,7 @@ paths:
   /player:
     get:
       summary: Get one or more players' stats (league-scoped)
-      description: >
-        Returns league-scoped stats for one or more Yahoo player keys. You can pass
-        repeated `player_key` params and/or a comma-separated `player_keys` param.
-        
-        **IMPORTANT:** Weekly stats (`type=week&week=X`) return aggregated totals FOR that week,
-        NOT game-by-game breakdowns. Yahoo's API only provides week totals, not individual game stats.
-        This is expected behavior - if a player has stats for week 1, those are their total stats
-        accumulated during that week's games, not per-game splits.
+      description: Returns league-scoped stats for Yahoo player keys. Weekly stats are aggregated week totals, not game-by-game breakdowns (Yahoo API limitation).
       operationId: getPlayerStats
       parameters:
         - name: league_id
@@ -460,13 +453,6 @@ paths:
           description: Upstream Yahoo error
         "500":
           description: Internal server error
-      description: >
-        Returns league-scoped stats for one or more players. Supports batch fetching
-        of multiple players in a single request. If some player keys are invalid,
-        the response will include a `warnings` field with skipped players.
-        
-        **Weekly stats are aggregated week totals, not game-by-game breakdowns.** This is how
-        Yahoo's API works - it does not provide per-game splits within a week.
 
 components:
   schemas:
