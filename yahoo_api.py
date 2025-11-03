@@ -31,7 +31,8 @@ def fetch_yahoo(url: str) -> dict:
     logger.info(f"Yahoo API request: {url}")
     
     try:
-        resp = yahoo.get(url)
+        # Add timeout to prevent hanging requests (30 seconds)
+        resp = yahoo.get(url, timeout=30)
         status_code = resp.status_code
         
         if resp.ok:
@@ -547,6 +548,12 @@ def batch_fetch_player_stats(
         import time
         
         normalized_league_id = normalize_league_id(league_id)
+        
+        # If week is provided but stats_type is not set, default to "week"
+        # This ensures cache keys match when to_dict() is called later
+        if week and not stats_type:
+            stats_type = "week"
+        
         enriched_stats = _fetch_players_stats(normalized_league_id, player_keys, stats_type, week)
         
         # Create a dictionary keyed by player_key and update player caches

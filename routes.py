@@ -211,10 +211,16 @@ def register_roster_routes(app: Flask) -> None:
             player_objects = [Player.from_yahoo_data(p) for _, p in all_players_data]
             
             # Batch fetch stats for all players
+            # This populates the cache for all players in one or few API calls
             if player_objects:
-                batch_fetch_player_stats(player_objects, league_id, week=week)
+                try:
+                    batch_fetch_player_stats(player_objects, league_id, week=week)
+                except Exception as e:
+                    logger.error(f"Error in batch fetch for all-rosters: {e}")
+                    # Continue without stats rather than failing entirely
             
             # Organize players back by team
+            # Stats should be cached from batch fetch, so to_dict() will use cache
             simplified = []
             for team_idx, team in enumerate(teams):
                 simplified_players = []
@@ -222,11 +228,16 @@ def register_roster_routes(app: Flask) -> None:
                 for i, (t_idx, p) in enumerate(all_players_data):
                     if t_idx == team_idx:
                         player_obj = player_objects[i]
-                        player_dict = player_obj.to_dict(
-                            include_stats=True,
-                            league_id=league_id,
-                            week=week
-                        )
+                        try:
+                            player_dict = player_obj.to_dict(
+                                include_stats=True,
+                                league_id=league_id,
+                                week=week
+                            )
+                        except Exception as e:
+                            logger.warning(f"Error getting stats for player {player_obj.player_key}: {e}")
+                            # Return player without stats if there's an error
+                            player_dict = player_obj.to_dict(include_stats=False)
                         
                         # Add additional fields for backward compatibility
                         player_dict.update({
