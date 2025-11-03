@@ -482,6 +482,148 @@ def _build_waivers_url(league_id: str, position: str, status: str) -> str:
     return f"{YAHOO_BASE_URL}/{resource_path}"
 
 
+def register_test_routes(app: Flask) -> None:
+    """Register test/debugging routes."""
+    
+    @app.route("/test/player", methods=["GET"])
+    def test_player_fetch():
+        """Test endpoint that checks auth, confirms login, and fetches player data without cache.
+        
+        Uses hardcoded values:
+        - Player key: 461.p.7200
+        - League ID: 461.l.1157326
+        
+        Returns:
+            JSON with auth status, login confirmation, and player data
+        """
+        from auth import load_token, yahoo_session, save_token
+        from requests_oauthlib import OAuth2Session
+        import time
+        from config import CLIENT_ID, CLIENT_SECRET, TOKEN_URL
+        from models import Player
+        from yahoo_api import fetch_yahoo, build_player_stats_url, parse_player_stats_response, get_league_stat_categories
+        
+        response_data = {
+            "test": "player_fetch",
+            "timestamp": time.time(),
+            "auth_status": {},
+            "login_confirmed": False,
+            "player_data": None,
+            "errors": []
+        }
+        
+        # Check if token exists
+        token = load_token()
+        if not token:
+            response_data["auth_status"] = {
+                "has_token": False,
+                "message": "No token found. Please visit /login to authenticate."
+            }
+            response_data["errors"].append("No authentication token found")
+            return jsonify(response_data), 401
+        
+        # Check if token is expired or expiring soon
+        expires_at = token.get("expires_at")
+        current_time = time.time()
+        token_age = expires_at - current_time if expires_at else None
+        
+        if expires_at and token_age is not None:
+            if token_age < 0:
+                response_data["auth_status"] = {
+                    "has_token": True,
+                    "expired": True,
+                    "expired_seconds_ago": abs(token_age),
+                    "message": "Token expired. Attempting refresh..."
+                }
+                response_data["errors"].append("Token has expired")
+            elif token_age < 300:  # Less than 5 minutes
+                response_data["auth_status"] = {
+                    "has_token": True,
+                    "expiring_soon": True,
+                    "expires_in_seconds": token_age,
+                    "message": "Token expiring soon. Refreshing..."
+                }
+            else:
+                response_data["auth_status"] = {
+                    "has_token": True,
+                    "valid": True,
+                    "expires_in_seconds": token_age,
+                    "message": "Token is valid"
+                }
+        
+        # Attempt to refresh token if needed
+        try:
+            yahoo = yahoo_session()
+            if not yahoo:
+                response_data["auth_status"]["session_created"] = False
+                response_data["errors"].append("Failed to create Yahoo session")
+                return jsonify(response_data), 401
+            
+            response_data["auth_status"]["session_created"] = True
+            
+            # Verify login by fetching profile (simple check)
+            try:
+                profile_url = "https://fantasysports.yahooapis.com/fantasy/v2/users;use_login=1"
+                profile_data = fetch_yahoo(profile_url)
+                
+                if isinstance(profile_data, dict) and profile_data.get("error"):
+                    response_data["login_confirmed"] = False
+                    response_data["errors"].append(f"Login verification failed: {profile_data.get('error')}")
+                    return jsonify(response_data), 401
+                
+                response_data["login_confirmed"] = True
+                response_data["auth_status"]["verified"] = True
+                response_data["auth_status"]["message"] = "Login confirmed successfully"
+                
+            except Exception as e:
+                response_data["login_confirmed"] = False
+                response_data["errors"].append(f"Failed to verify login: {str(e)}")
+                return jsonify(response_data), 401
+            
+        except Exception as e:
+            response_data["auth_status"]["refresh_failed"] = True
+            response_data["errors"].append(f"Token refresh failed: {str(e)}")
+            return jsonify(response_data), 401
+        
+        # Now fetch player data without cache
+        try:
+            player_key = "461.p.7200"
+            league_id = "461.l.1157326"
+            
+            # Create a Player object
+            player = Player(player_key=player_key)
+            
+            # Fetch stats with force_refresh=True to bypass cache
+            stats = player.get_stats(league_id, force_refresh=True)
+            
+            if stats:
+                response_data["player_data"] = {
+                    "player_key": player_key,
+                    "league_id": league_id,
+                    "stats": stats
+                }
+                response_data["success"] = True
+            else:
+                response_data["errors"].append("Failed to fetch player stats")
+                response_data["player_data"] = {
+                    "player_key": player_key,
+                    "league_id": league_id,
+                    "stats": None
+                }
+            
+        except Exception as e:
+            logger.error(f"Error fetching player data in test endpoint: {e}")
+            response_data["errors"].append(f"Error fetching player data: {str(e)}")
+            response_data["player_data"] = {
+                "player_key": "461.p.7200",
+                "league_id": "461.l.1157326",
+                "error": str(e)
+            }
+        
+        status_code = 200 if response_data.get("success") and response_data["login_confirmed"] else 500
+        return jsonify(response_data), status_code
+
+
 def register_all_routes(app: Flask) -> None:
     """Register all routes with the Flask app."""
     register_auth_routes(app)
@@ -489,4 +631,5 @@ def register_all_routes(app: Flask) -> None:
     register_league_routes(app)
     register_roster_routes(app)
     register_player_routes(app)
+    register_test_routes(app)
 
