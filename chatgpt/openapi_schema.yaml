@@ -89,9 +89,32 @@ paths:
         "200":
           description: Returns weekly matchups
 
+  /matchups:
+    get:
+      summary: Get matchups with query params (supports ?week=current)
+      operationId: getMatchupsQuery
+      parameters:
+        - in: query
+          name: league_id
+          required: true
+          schema:
+            type: string
+          description: Yahoo league ID
+        - in: query
+          name: week
+          required: false
+          schema:
+            type: string
+          description: Week number or "current" for current week
+      responses:
+        "200":
+          description: Returns matchups for specified week
+        "400":
+          description: Missing league_id parameter
+
   /standings/{league_id}:
     get:
-      summary: Get league standings
+      summary: Get league standings with points for/against
       operationId: getStandings
       parameters:
         - in: path
@@ -101,11 +124,45 @@ paths:
             type: string
       responses:
         "200":
-          description: Returns league standings
+          description: Returns league standings with extracted points for/against per team
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  league_id:
+                    type: string
+                  standings:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        team_key:
+                          type: string
+                        team_id:
+                          type: string
+                        name:
+                          type: string
+                        rank:
+                          type: integer
+                        wins:
+                          type: integer
+                        losses:
+                          type: integer
+                        ties:
+                          type: integer
+                        points_for:
+                          type: number
+                        points_against:
+                          type: number
+                        point_differential:
+                          type: number
+                  raw:
+                    type: object
 
   /transactions/{league_id}:
     get:
-      summary: Get recent transactions
+      summary: Get league transactions (trades, adds, drops)
       operationId: getTransactions
       parameters:
         - in: path
@@ -115,7 +172,106 @@ paths:
             type: string
       responses:
         "200":
-          description: Returns recent league transactions
+          description: Returns recent league transactions (trades, adds, drops)
+
+  /league/{league_id}/draftresults:
+    get:
+      summary: Get all draft picks for the league
+      operationId: getDraftResults
+      parameters:
+        - in: path
+          name: league_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Returns all draft picks
+
+  /league/{league_id}/players/stats:
+    get:
+      summary: Get full league player stats leaderboard
+      operationId: getLeaguePlayersStats
+      parameters:
+        - in: path
+          name: league_id
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: week
+          required: false
+          schema:
+            type: string
+          description: Optional week number for week-specific stats
+      responses:
+        "200":
+          description: Returns full league player stats (season or week totals)
+
+  /team/{team_key}/stats:
+    get:
+      summary: Get aggregated stats for a team's roster
+      operationId: getTeamStats
+      parameters:
+        - in: path
+          name: team_key
+          required: true
+          schema:
+            type: string
+          description: Yahoo team key (e.g., 461.l.1157326.t.1)
+        - in: query
+          name: week
+          required: false
+          schema:
+            type: string
+          description: Optional week number for week-specific stats
+      responses:
+        "200":
+          description: Returns aggregated team stats by position and totals
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  team_key:
+                    type: string
+                  league_id:
+                    type: string
+                  week:
+                    type: string
+                    nullable: true
+                  team_name:
+                    type: string
+                  total_players:
+                    type: integer
+                  stats_by_position:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          stat_id:
+                            type: string
+                          stat_name:
+                            type: string
+                          value:
+                            type: number
+                  total_stats:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        stat_id:
+                          type: string
+                        stat_name:
+                          type: string
+                        value:
+                          type: number
+        "400":
+          description: Invalid team_key or missing league_id
+        "500":
+          description: Internal server error
 
   /teams/{league_id}:
     get:

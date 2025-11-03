@@ -105,16 +105,114 @@ def register_league_routes(app: Flask) -> None:
     
     @app.route("/standings/<league_id>")
     def get_standings(league_id):
-        """Get league standings."""
+        """Get league standings with points for/against extracted."""
         league_id = normalize_league_id(league_id)
         url = f"{YAHOO_BASE_URL}/league/{league_id}/standings"
-        return jsonify(fetch_yahoo(url))
+        data = fetch_yahoo(url)
+        
+        if isinstance(data, dict) and data.get("error"):
+            return jsonify(data), 500
+        
+        try:
+            # Extract and simplify standings data
+            league = data.get("fantasy_content", {}).get("league", {})
+            standings_node = league.get("standings", {})
+            teams_node = standings_node.get("teams", {})
+            team_entries = teams_node.get("team", [])
+            
+            if not team_entries:
+                return jsonify(data)
+            
+            # Normalize to list
+            if isinstance(team_entries, dict):
+                team_entries = [team_entries]
+            
+            simplified_standings = []
+            for team in team_entries:
+                team_standings = team.get("team_standings", {})
+                stats = team_standings.get("stat", [])
+                if isinstance(stats, dict):
+                    stats = [stats]
+                
+                # Extract key stats
+                points_for = None
+                points_against = None
+                wins = None
+                losses = None
+                ties = None
+                
+                for stat in stats:
+                    stat_id = stat.get("stat_id")
+                    value = stat.get("value")
+                    
+                    # Common stat IDs (may vary by league)
+                    if stat_id in ["7", "101"]:  # Points For
+                        points_for = float(value) if value else 0
+                    elif stat_id in ["8", "102"]:  # Points Against
+                        points_against = float(value) if value else 0
+                    elif stat_id in ["0", "103"]:  # Wins
+                        wins = int(value) if value else 0
+                    elif stat_id in ["1", "104"]:  # Losses
+                        losses = int(value) if value else 0
+                    elif stat_id in ["2", "105"]:  # Ties
+                        ties = int(value) if value else 0
+                
+                # Build simplified entry
+                simplified = {
+                    "team_key": team.get("team_key"),
+                    "team_id": team.get("team_id"),
+                    "name": team.get("name"),
+                    "wins": wins,
+                    "losses": losses,
+                    "ties": ties,
+                    "points_for": points_for,
+                    "points_against": points_against,
+                    "point_differential": points_for - points_against if points_for and points_against else None,
+                }
+                
+                # Add rank if available
+                rank = team_standings.get("rank")
+                if rank:
+                    simplified["rank"] = int(rank)
+                
+                simplified_standings.append(simplified)
+            
+            # Sort by rank if available, otherwise by wins
+            simplified_standings.sort(key=lambda x: x.get("rank", x.get("wins", 0)), reverse=False)
+            
+            return jsonify({
+                "league_id": league_id,
+                "standings": simplified_standings,
+                "raw": data
+            })
+        except Exception as e:
+            logger.error(f"Error parsing standings: {e}")
+            # Return raw data if parsing fails
+            return jsonify(data)
     
     @app.route("/transactions/<league_id>")
     def get_transactions(league_id):
-        """Get league transactions."""
+        """Get league transactions (trades, adds, drops)."""
         league_id = normalize_league_id(league_id)
         url = f"{YAHOO_BASE_URL}/league/{league_id}/transactions"
+        return jsonify(fetch_yahoo(url))
+    
+    @app.route("/league/<league_id>/draftresults")
+    def get_draft_results(league_id):
+        """Get all draft picks for the league."""
+        league_id = normalize_league_id(league_id)
+        url = f"{YAHOO_BASE_URL}/league/{league_id}/draftresults"
+        return jsonify(fetch_yahoo(url))
+    
+    @app.route("/league/<league_id>/players/stats")
+    def get_league_players_stats(league_id):
+        """Get full league player stats leaderboard (season totals)."""
+        league_id = normalize_league_id(league_id)
+        week = request.args.get("week")  # Optional: week-specific stats
+        if week:
+            url = f"{YAHOO_BASE_URL}/league/{league_id}/players;stats=1/stats;type=week;week={week}"
+        else:
+            url = f"{YAHOO_BASE_URL}/league/{league_id}/players;stats=1/stats"
         return jsonify(fetch_yahoo(url))
     
     @app.route("/teams/<league_id>")
@@ -122,6 +220,33 @@ def register_league_routes(app: Flask) -> None:
         """Get all teams in a league."""
         league_id = normalize_league_id(league_id)
         url = f"{YAHOO_BASE_URL}/league/{league_id}/teams"
+        return jsonify(fetch_yahoo(url))
+    
+    @app.route("/matchups")
+    def get_matchups_query():
+        """Get matchups with query params (alternative to /matchups/<league_id>/<week>)."""
+        league_id = request.args.get("league_id")
+        week = request.args.get("week", "current")
+        
+        if not league_id:
+            return jsonify({"error": "league_id query parameter is required"}), 400
+        
+        league_id = normalize_league_id(league_id)
+        
+        if week == "current":
+            # Get current week from league info
+            league_url = f"{YAHOO_BASE_URL}/league/{league_id}"
+            league_data = fetch_yahoo(league_url)
+            try:
+                current_week = league_data.get("fantasy_content", {}).get("league", {}).get("current_week")
+                if current_week:
+                    week = current_week
+                else:
+                    return jsonify({"error": "Could not determine current week"}), 500
+            except Exception:
+                return jsonify({"error": "Could not determine current week"}), 500
+        
+        url = f"{YAHOO_BASE_URL}/league/{league_id}/scoreboard;week={week}"
         return jsonify(fetch_yahoo(url))
 
 
@@ -180,6 +305,124 @@ def register_roster_routes(app: Flask) -> None:
                 logger.error(f"Error parsing roster with stats: {e}")
         
         return jsonify(data)
+    
+    @app.route("/team/<team_key>/stats")
+    def get_team_stats(team_key):
+        """Get aggregated stats for a team's roster (positional breakdown).
+        
+        Query params:
+          week  – Optional week number for week-specific stats
+        """
+        league_id = extract_league_id_from_team_key(team_key)
+        week = request.args.get("week")
+        
+        if not league_id:
+            return jsonify({"error": "Could not extract league_id from team_key"}), 400
+        
+        # Get roster with stats
+        url = f"{YAHOO_BASE_URL}/team/{team_key}/roster"
+        roster_data = fetch_yahoo(url)
+        
+        if isinstance(roster_data, dict) and roster_data.get("error"):
+            return jsonify(roster_data), 500
+        
+        try:
+            team_info = roster_data.get("fantasy_content", {}).get("team", {})
+            roster = team_info.get("roster", {})
+            players_data = roster.get("players", {}).get("player", [])
+            
+            if not players_data:
+                return jsonify({
+                    "team_key": team_key,
+                    "league_id": league_id,
+                    "week": week,
+                    "total_players": 0,
+                    "stats_by_position": {},
+                    "total_stats": []
+                })
+            
+            # Normalize to list
+            if isinstance(players_data, dict):
+                players_data = [players_data]
+            
+            # Get player objects and fetch stats
+            player_objects = [Player.from_yahoo_data(p) for p in players_data]
+            if player_objects:
+                batch_fetch_player_stats(player_objects, league_id, week=week)
+            
+            # Aggregate stats by position
+            stats_by_position = {}
+            total_stats_dict = {}  # Aggregate all stats
+            stat_categories = {}
+            
+            try:
+                from yahoo_api import get_league_stat_categories
+                stat_categories = get_league_stat_categories(league_id)
+            except Exception:
+                pass
+            
+            for player_obj in player_objects:
+                player_stats = player_obj.get_stats(league_id, stats_type="week" if week else "season", week=week)
+                if not player_stats:
+                    continue
+                
+                position = player_obj.position or "UNKNOWN"
+                if position not in stats_by_position:
+                    stats_by_position[position] = {}
+                
+                for stat in player_stats.get("stats", []):
+                    stat_id = str(stat.get("stat_id"))
+                    value = stat.get("value")
+                    
+                    # Try to convert to number for aggregation
+                    try:
+                        num_value = float(value) if value else 0
+                    except (ValueError, TypeError):
+                        continue
+                    
+                    # Aggregate by position
+                    if stat_id not in stats_by_position[position]:
+                        stats_by_position[position][stat_id] = 0
+                    stats_by_position[position][stat_id] += num_value
+                    
+                    # Aggregate totals
+                    if stat_id not in total_stats_dict:
+                        total_stats_dict[stat_id] = 0
+                    total_stats_dict[stat_id] += num_value
+            
+            # Format response
+            formatted_by_position = {}
+            for pos, stats in stats_by_position.items():
+                formatted_by_position[pos] = [
+                    {
+                        "stat_id": sid,
+                        "stat_name": stat_categories.get(sid, f"Stat {sid}"),
+                        "value": v
+                    }
+                    for sid, v in stats.items()
+                ]
+            
+            formatted_totals = [
+                {
+                    "stat_id": sid,
+                    "stat_name": stat_categories.get(sid, f"Stat {sid}"),
+                    "value": v
+                }
+                for sid, v in total_stats_dict.items()
+            ]
+            
+            return jsonify({
+                "team_key": team_key,
+                "league_id": league_id,
+                "week": week,
+                "team_name": team_info.get("name"),
+                "total_players": len(player_objects),
+                "stats_by_position": formatted_by_position,
+                "total_stats": formatted_totals
+            })
+        except Exception as e:
+            logger.error(f"Error calculating team stats: {e}")
+            return jsonify({"error": str(e), "raw": roster_data}), 500
     
     @app.route("/all-rosters/<league_id>")
     def all_rosters(league_id):

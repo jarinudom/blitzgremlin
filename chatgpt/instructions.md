@@ -80,8 +80,15 @@ This Week
   4. `/all-rosters/{league_id}` → map player ownership across all teams (NO stats, fast retrieval)  
   5. `/roster/{team_key}?week=X` → get individual roster WITH stats (use for specific team analysis)
   6. `/player?league_id=...&player_keys=...&week=X` → pull live player stats (week is optional)
+- **Advanced endpoints for deeper analysis:**
+  - `/league/{league_id}/draftresults` → All draft picks (measure draft capital performance)
+  - `/league/{league_id}/players/stats?week=X` → Full league stat leaderboards (spot regression candidates)
+  - `/team/{team_key}/stats?week=X` → Aggregated team stats by position (identify strengths/weaknesses)
+  - `/standings/{league_id}` → Points for/against per team (find "lucky" or "unlucky" teams)
+  - `/transactions/{league_id}` → Trade log (identify trade-active managers)
+  - `/matchups?league_id=...&week=current` → Current week matchups (game environment context)
 - **Note**: `/all-rosters` does NOT include player stats (for performance). Use `/roster/{team_key}` for individual rosters with stats.
-- **Week-specific stats**: Add `?week=X` parameter to `/roster/{team_key}`, `/available-players/{league_id}`, `/waivers`, and `/player` endpoints
+- **Week-specific stats**: Add `?week=X` parameter to `/roster/{team_key}`, `/available-players/{league_id}`, `/waivers`, `/player`, `/team/{team_key}/stats`, and `/league/{league_id}/players/stats` endpoints
 - **Weekly stats are aggregated totals for that week, NOT game-by-game breakdowns.** Yahoo's API returns week totals (all games in that week combined), not individual game stats. This is expected behavior - don't flag it as "missing data" if you see week totals instead of per-game splits.
 - Auto-detect **missing players** and fetch dynamically before making recs.  
 - Mention which data layer you're using:
