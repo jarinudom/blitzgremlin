@@ -192,10 +192,80 @@ def register_league_routes(app: Flask) -> None:
     
     @app.route("/transactions/<league_id>")
     def get_transactions(league_id):
-        """Get league transactions (trades, adds, drops)."""
+        """Get league transactions (trades, adds, drops) with optional filtering.
+        
+        Query params:
+          type   – Filter by transaction type: 'trade', 'add', 'drop', 'waiver', or 'all' (default: 'all')
+          limit  – Maximum number of transactions to return (default: 50, max: 500)
+          count  – Alias for limit
+        """
         league_id = normalize_league_id(league_id)
+        
+        # Get query parameters
+        transaction_type = request.args.get("type", "all").lower()
+        limit = request.args.get("limit") or request.args.get("count")
+        
+        # Parse limit
+        max_limit = 500
+        try:
+            limit = int(limit) if limit else 50
+            limit = min(max(1, limit), max_limit)  # Clamp between 1 and max_limit
+        except (ValueError, TypeError):
+            limit = 50
+        
+        # Build Yahoo API URL with type filter if specified
         url = f"{YAHOO_BASE_URL}/league/{league_id}/transactions"
-        return jsonify(fetch_yahoo(url))
+        if transaction_type in ["trade", "add", "drop", "waiver"]:
+            url += f";type={transaction_type}"
+        elif transaction_type != "all":
+            return jsonify({"error": f"Invalid transaction type: {transaction_type}. Use 'trade', 'add', 'drop', 'waiver', or 'all'"}), 400
+        
+        # Fetch from Yahoo
+        data = fetch_yahoo(url)
+        
+        if isinstance(data, dict) and data.get("error"):
+            return jsonify(data), 500
+        
+        try:
+            # Extract transactions from response
+            league = data.get("fantasy_content", {}).get("league", {})
+            transactions_node = league.get("transactions", {})
+            transaction_entries = transactions_node.get("transaction", [])
+            
+            if not transaction_entries:
+                return jsonify({
+                    "league_id": league_id,
+                    "type": transaction_type,
+                    "count": 0,
+                    "transactions": [],
+                    "raw": data
+                })
+            
+            # Normalize to list
+            if isinstance(transaction_entries, dict):
+                transaction_entries = [transaction_entries]
+            
+            # Apply additional server-side filtering if needed
+            # (Yahoo API already filtered by type, but we can filter further if needed)
+            filtered_transactions = transaction_entries
+            
+            # Limit results
+            if len(filtered_transactions) > limit:
+                filtered_transactions = filtered_transactions[:limit]
+            
+            return jsonify({
+                "league_id": league_id,
+                "type": transaction_type,
+                "limit": limit,
+                "returned": len(filtered_transactions),
+                "total_available": len(transaction_entries),
+                "transactions": filtered_transactions,
+                "raw": data
+            })
+        except Exception as e:
+            logger.error(f"Error parsing transactions: {e}")
+            # Return raw data if parsing fails
+            return jsonify(data)
     
     @app.route("/league/<league_id>/draftresults")
     def get_draft_results(league_id):

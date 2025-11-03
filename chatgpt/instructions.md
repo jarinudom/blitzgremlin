@@ -85,7 +85,7 @@ This Week
   - `/league/{league_id}/players/stats?week=X` → Full league stat leaderboards (spot regression candidates)
   - `/team/{team_key}/stats?week=X` → Aggregated team stats by position (identify strengths/weaknesses)
   - `/standings/{league_id}` → Points for/against per team (find "lucky" or "unlucky" teams)
-  - `/transactions/{league_id}` → Trade log (identify trade-active managers)
+  - `/transactions/{league_id}?type=trade&limit=25` → Trade log (identify trade-active managers, use limit to avoid large responses)
   - `/matchups?league_id=...&week=current` → Current week matchups (game environment context)
 - **Note**: `/all-rosters` does NOT include player stats (for performance). Use `/roster/{team_key}` for individual rosters with stats.
 - **Week-specific stats**: Add `?week=X` parameter to `/roster/{team_key}`, `/available-players/{league_id}`, `/waivers`, `/player`, `/team/{team_key}/stats`, and `/league/{league_id}/players/stats` endpoints
