@@ -134,7 +134,11 @@ def register_roster_routes(app: Flask) -> None:
     
     @app.route("/roster/<team_key>")
     def get_roster(team_key):
-        """Get roster for a specific team with enriched stats."""
+        """Get roster for a specific team with enriched stats.
+        
+        Query params:
+          week  – Optional week number for week-specific stats
+        """
         url = f"{YAHOO_BASE_URL}/team/{team_key}/roster"
         data = fetch_yahoo(url)
         
@@ -142,6 +146,7 @@ def register_roster_routes(app: Flask) -> None:
             return jsonify(data), 500
         
         league_id = extract_league_id_from_team_key(team_key)
+        week = request.args.get("week")
         
         if league_id:
             try:
@@ -155,10 +160,10 @@ def register_roster_routes(app: Flask) -> None:
                     player_objects = [Player.from_yahoo_data(p) for p in player_list]
                     
                     if player_objects:
-                        batch_fetch_player_stats(player_objects, league_id)
+                        batch_fetch_player_stats(player_objects, league_id, week=week)
                     
                     players = [
-                        player_obj.to_dict(include_stats=True, league_id=league_id)
+                        player_obj.to_dict(include_stats=True, league_id=league_id, week=week)
                         for player_obj in player_objects
                     ]
                     
@@ -166,6 +171,7 @@ def register_roster_routes(app: Flask) -> None:
                         return jsonify({
                             "team_key": team_key,
                             "league_id": league_id,
+                            "week": week,
                             "count": len(players),
                             "players": players,
                             "raw": data
@@ -177,8 +183,13 @@ def register_roster_routes(app: Flask) -> None:
     
     @app.route("/all-rosters/<league_id>")
     def all_rosters(league_id):
-        """Get all rosters in a league with enriched stats."""
+        """Get all rosters in a league with enriched stats.
+        
+        Query params:
+          week  – Optional week number for week-specific stats
+        """
         league_id = normalize_league_id(league_id)
+        week = request.args.get("week")
         url = f"{YAHOO_BASE_URL}/league/{league_id}/teams/roster"
         data = fetch_yahoo(url)
 
@@ -201,7 +212,7 @@ def register_roster_routes(app: Flask) -> None:
             
             # Batch fetch stats for all players
             if player_objects:
-                batch_fetch_player_stats(player_objects, league_id)
+                batch_fetch_player_stats(player_objects, league_id, week=week)
             
             # Organize players back by team
             simplified = []
@@ -211,7 +222,11 @@ def register_roster_routes(app: Flask) -> None:
                 for i, (t_idx, p) in enumerate(all_players_data):
                     if t_idx == team_idx:
                         player_obj = player_objects[i]
-                        player_dict = player_obj.to_dict(include_stats=True, league_id=league_id)
+                        player_dict = player_obj.to_dict(
+                            include_stats=True,
+                            league_id=league_id,
+                            week=week
+                        )
                         
                         # Add additional fields for backward compatibility
                         player_dict.update({
@@ -231,7 +246,11 @@ def register_roster_routes(app: Flask) -> None:
                     "players": simplified_players
                 })
 
-            return jsonify({"league_id": league_id, "teams": simplified})
+            return jsonify({
+                "league_id": league_id,
+                "week": week,
+                "teams": simplified
+            })
         except Exception as e:
             return jsonify({"error": str(e), "raw": data}), 500
 
@@ -257,10 +276,18 @@ def register_player_routes(app: Flask) -> None:
     
     @app.route("/available-players/<league_id>")
     def available_players(league_id):
-        """Get available players in a league."""
+        """Get available players in a league.
+        
+        Query params:
+          week  – Optional week number for week-specific stats
+          Other params are passed through to Yahoo API as filters
+        """
         league_id = normalize_league_id(league_id)
+        week = request.args.get("week")
         params = request.args.to_dict()
-        filters = ";".join([f"{k}={v}" for k, v in params.items()])
+        # Remove week from filters since we handle it separately
+        filters_dict = {k: v for k, v in params.items() if k != "week"}
+        filters = ";".join([f"{k}={v}" for k, v in filters_dict.items()])
         url = f"{YAHOO_BASE_URL}/league/{league_id}/players{';' + filters if filters else ''}"
         data = fetch_yahoo(url)
         
@@ -270,13 +297,18 @@ def register_player_routes(app: Flask) -> None:
         try:
             parsed_players = parse_yahoo_players_response(data)
             if parsed_players:
-                batch_fetch_player_stats(parsed_players, league_id)
+                batch_fetch_player_stats(parsed_players, league_id, week=week)
                 
                 return jsonify({
                     "league_id": league_id,
+                    "week": week,
                     "count": len(parsed_players),
                     "players": [
-                        player.to_dict(include_stats=True, league_id=league_id)
+                        player.to_dict(
+                            include_stats=True,
+                            league_id=league_id,
+                            week=week
+                        )
                         for player in parsed_players
                     ],
                     "raw": data
@@ -294,10 +326,12 @@ def register_player_routes(app: Flask) -> None:
           league_id  – Yahoo league ID (required)
           position   – QB, RB, WR, TE, DEF, K (optional, defaults to ALL)
           status     – A (all available), FA (free agents), W (waivers) (optional, defaults to A)
+          week       – Optional week number for week-specific stats
         """
         league_id = normalize_league_id(request.args.get("league_id"))
         position = request.args.get("position", DEFAULT_POSITION)
         status = request.args.get("status", DEFAULT_STATUS)
+        week = request.args.get("week")
         
         # Validate parameters
         is_valid, error_message = _validate_waivers_params(league_id, position, status)
@@ -314,15 +348,20 @@ def register_player_routes(app: Flask) -> None:
             parsed_players = parse_yahoo_players_response(data)
             
             if parsed_players:
-                batch_fetch_player_stats(parsed_players, league_id)
+                batch_fetch_player_stats(parsed_players, league_id, week=week)
             
             return jsonify({
                 "league_id": league_id,
                 "position": position,
                 "status": status,
+                "week": week,
                 "count": len(parsed_players),
                 "players": [
-                    player.to_dict(include_stats=True, league_id=league_id)
+                    player.to_dict(
+                        include_stats=True,
+                        league_id=league_id,
+                        week=week
+                    )
                     for player in parsed_players
                 ]
             })

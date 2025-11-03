@@ -109,7 +109,8 @@ class Player:
         self,
         include_stats: bool = False,
         league_id: str | None = None,
-        stats_type: str | None = None
+        stats_type: str | None = None,
+        week: str | None = None
     ) -> dict:
         """Convert Player instance to dictionary for JSON serialization.
         
@@ -117,6 +118,7 @@ class Player:
             include_stats: If True, include player stats in the output (requires league_id)
             league_id: League ID needed when include_stats is True
             stats_type: Optional stats type ("season" or "week") when including stats
+            week: Optional week number for week-specific stats
         
         Returns:
             Dictionary representation of the player, optionally with stats
@@ -146,7 +148,10 @@ class Player:
         # Include stats if requested and league_id is provided
         if include_stats and league_id:
             try:
-                stats = self.get_stats(league_id, stats_type=stats_type)
+                # Use week if provided, or determine stats_type from week
+                if week:
+                    stats_type = "week"
+                stats = self.get_stats(league_id, stats_type=stats_type, week=week)
                 if stats:
                     result["stats"] = stats.get("stats", [])
                     result["stats_type"] = stats.get("stats_type")

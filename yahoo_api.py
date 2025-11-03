@@ -149,13 +149,21 @@ def build_player_stats_url(
     Args:
         league_id: Yahoo league ID
         player_key: Yahoo player key
-        stats_type: Optional stats type (not used in URL, but kept for consistency)
-        week: Optional week number (not used in URL, but kept for consistency)
+        stats_type: Optional stats type ("season" or "week")
+        week: Optional week number (required if stats_type is "week")
     
     Returns:
         Yahoo API URL string
     """
+    # Build base resource path
     resource = f"league/{league_id}/players;player_keys={player_key}/stats"
+    
+    # Add week parameter to the players collection if specified
+    # Format: league/{league_id}/players;player_keys={key};week={week}/stats
+    if week:
+        # Insert week parameter before /stats
+        resource = resource.replace("/stats", f";week={week}/stats")
+    
     return f"{YAHOO_BASE_URL}/{resource}"
 
 
@@ -167,20 +175,22 @@ def build_multi_player_stats_url(
 ) -> str:
     """Build Yahoo API URL for multiple players in a league context.
     
-    Note: Yahoo API doesn't support type/week as semicolon params after /stats.
-    We fetch all available stats.
-    
     Args:
         league_id: Yahoo league ID
         player_keys: List of Yahoo player keys
-        stats_type: Optional stats type (not used, kept for consistency)
-        week: Optional week number (not used, kept for consistency)
+        stats_type: Optional stats type ("season" or "week")
+        week: Optional week number (required if stats_type is "week")
     
     Returns:
         Yahoo API URL string
     """
     joined = ",".join(player_keys)
     resource = f"league/{league_id}/players;player_keys={joined}/stats"
+    
+    # Add week parameter to the players collection if specified
+    if week:
+        resource = resource.replace("/stats", f";week={week}/stats")
+    
     return f"{YAHOO_BASE_URL}/{resource}"
 
 
