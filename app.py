@@ -172,13 +172,17 @@ def get_roster(team_key):
             player_entries = players_data.get("player")
             
             if player_entries:
-                players = []
                 player_list = player_entries if isinstance(player_entries, list) else [player_entries]
                 
-                for p in player_list:
-                    player_obj = Player.from_yahoo_data(p)
-                    player_dict = player_obj.to_dict(include_stats=True, league_id=league_id)
-                    players.append(player_dict)
+                # Create all Player objects first
+                player_objects = [Player.from_yahoo_data(p) for p in player_list]
+                
+                # Batch fetch stats for all players in one API call
+                if player_objects:
+                    batch_fetch_player_stats(player_objects, league_id)
+                
+                # Convert to dicts with stats already cached
+                players = [player_obj.to_dict(include_stats=True, league_id=league_id) for player_obj in player_objects]
                 
                 if players:
                     return jsonify({
@@ -204,36 +208,54 @@ def all_rosters(league_id):
         if isinstance(teams, dict):
             teams = [teams]
 
-        simplified = []
-        for team in teams:
+        # Collect all players from all teams first
+        all_players_data = []  # Store (team_index, player_data) tuples
+        for team_idx, team in enumerate(teams):
             players = team.get("roster", {}).get("players", {}).get("player", [])
             if isinstance(players, dict):
                 players = [players]
-
-            simplified_players = []
             for p in players:
-                # Create Player object to use its methods
-                player_obj = Player.from_yahoo_data(p)
-                player_dict = player_obj.to_dict(include_stats=True, league_id=league_id)
-                
-                # Add additional fields that might not be in to_dict
-                player_dict.update({
-                    "player_id": p.get("player_id"),
-                    "team_abbr": p.get("editorial_team_abbr"),
-                })
-                
-                # Preserve original field names for backward compatibility
-                if "position" not in player_dict:
-                    player_dict["position"] = p.get("display_position")
-                if "primary_position" not in player_dict:
-                    player_dict["primary_position"] = p.get("primary_position")
-                if "bye_week" not in player_dict:
-                    player_dict["bye_week"] = p.get("bye_weeks", {}).get("week")
-                if "slot" not in player_dict:
-                    player_dict["slot"] = p.get("selected_position", {}).get("position")
-                
-                simplified_players.append(player_dict)
-
+                all_players_data.append((team_idx, p))
+        
+        # Create all Player objects
+        player_objects = []
+        for _, p in all_players_data:
+            player_obj = Player.from_yahoo_data(p)
+            player_objects.append(player_obj)
+        
+        # Batch fetch stats for all players in one API call
+        if player_objects:
+            batch_fetch_player_stats(player_objects, league_id)
+        
+        # Now organize players back by team and convert to dicts
+        simplified = []
+        for team_idx, team in enumerate(teams):
+            simplified_players = []
+            
+            # Find all players for this team
+            for i, (t_idx, p) in enumerate(all_players_data):
+                if t_idx == team_idx:
+                    player_obj = player_objects[i]
+                    player_dict = player_obj.to_dict(include_stats=True, league_id=league_id)
+                    
+                    # Add additional fields that might not be in to_dict
+                    player_dict.update({
+                        "player_id": p.get("player_id"),
+                        "team_abbr": p.get("editorial_team_abbr"),
+                    })
+                    
+                    # Preserve original field names for backward compatibility
+                    if "position" not in player_dict:
+                        player_dict["position"] = p.get("display_position")
+                    if "primary_position" not in player_dict:
+                        player_dict["primary_position"] = p.get("primary_position")
+                    if "bye_week" not in player_dict:
+                        player_dict["bye_week"] = p.get("bye_weeks", {}).get("week")
+                    if "slot" not in player_dict:
+                        player_dict["slot"] = p.get("selected_position", {}).get("position")
+                    
+                    simplified_players.append(player_dict)
+            
             simplified.append({
                 "team_key": team.get("team_key"),
                 "team_id": team.get("team_id"),
@@ -262,6 +284,9 @@ def available_players(league_id):
     try:
         parsed_players = parse_yahoo_players_response(data)
         if parsed_players:
+            # Batch fetch stats for all players in one API call
+            batch_fetch_player_stats(parsed_players, league_id)
+            
             return jsonify({
                 "league_id": league_id,
                 "count": len(parsed_players),
@@ -638,6 +663,11 @@ def get_waivers():
         
         # Parse and return player data
         parsed_players = parse_yahoo_players_response(data)
+        
+        # Batch fetch stats for all players in one API call
+        if parsed_players:
+            batch_fetch_player_stats(parsed_players, league_id)
+        
         return jsonify({
             "league_id": league_id,
             "position": position,
@@ -819,6 +849,58 @@ def _fetch_players_stats(league_id: str, player_keys: list[str], stats_type: str
             "stats": stats,
         })
     return enriched
+
+def batch_fetch_player_stats(players: list[Player], league_id: str, stats_type: str | None = None, week: str | None = None) -> dict[str, dict]:
+    """Fetch stats for multiple players in a single API call and return as a dict keyed by player_key.
+    
+    Args:
+        players: List of Player objects
+        league_id: League ID for fetching stats
+        stats_type: Optional stats type ("season" or "week")
+        week: Optional week number (required if stats_type is "week")
+    
+    Returns:
+        Dictionary mapping player_key to stats dict (with same format as get_stats returns)
+    """
+    if not players:
+        return {}
+    
+    # Filter players with valid player_keys
+    valid_players = [p for p in players if p.player_key]
+    if not valid_players:
+        return {}
+    
+    # Collect all player keys
+    player_keys = [p.player_key for p in valid_players]
+    
+    try:
+        # Normalize league_id
+        normalized_league_id = normalize_league_id(league_id)
+        
+        # Fetch stats for all players in one API call
+        enriched_stats = _fetch_players_stats(normalized_league_id, player_keys, stats_type, week)
+        
+        # Create a dictionary keyed by player_key for easy lookup
+        stats_dict = {}
+        for stat_data in enriched_stats:
+            player_key = stat_data.get("player_key")
+            if player_key:
+                # Update cache for each player object
+                for player in valid_players:
+                    if player.player_key == player_key:
+                        # Store in player's cache
+                        cache_key = f"{normalized_league_id}_{stats_type or 'season'}_{week or 'all'}"
+                        player._stats_cache[cache_key] = {
+                            "stats": stat_data,
+                            "timestamp": time.time()
+                        }
+                stats_dict[player_key] = stat_data
+        
+        return stats_dict
+        
+    except Exception as e:
+        print(f"⚠️ Error batch fetching player stats: {e}")
+        return {}
 
 
 @app.route("/player", methods=["GET"])
