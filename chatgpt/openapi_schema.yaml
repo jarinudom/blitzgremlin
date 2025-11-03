@@ -176,8 +176,11 @@ paths:
 
   /all-rosters/{league_id}:
     get:
-      summary: Get simplified rosters for all teams in a league with enriched stats
+      summary: Get simplified rosters for all teams in a league (no player stats, for performance)
       operationId: getAllRosters
+      description: >
+        Returns all team rosters without player stats for fast retrieval. Use /roster/{team_key}
+        endpoint to get individual rosters with enriched player stats.
       parameters:
         - in: path
           name: league_id
@@ -190,10 +193,10 @@ paths:
           required: false
           schema:
             type: string
-          description: Optional week number for week-specific stats
+          description: Optional week parameter (not used when stats are disabled)
       responses:
         "200":
-          description: Returns simplified rosters for all teams with enriched player stats
+          description: Returns simplified rosters for all teams without player stats (use /roster/{team_key} for stats)
           content:
             application/json:
               schema:
