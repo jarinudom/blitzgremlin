@@ -1,0 +1,515 @@
+openapi: 3.1.0
+info:
+  title: BlitzGremlin Yahoo Fantasy API
+  description: Custom API wrapper around Yahoo Fantasy Sports for BlitzGremlin GPT
+  version: "1.0.0"
+servers:
+  - url: https://blitzgremlin.onrender.com
+
+paths:
+  /:
+    get:
+      summary: Health check
+      operationId: health
+      responses:
+        "200":
+          description: Service is running
+
+  /login:
+    get:
+      summary: Start Yahoo OAuth login
+      operationId: login
+      responses:
+        "302":
+          description: Redirect to Yahoo login
+
+  /callback:
+    get:
+      summary: Yahoo OAuth callback
+      operationId: callback
+      responses:
+        "200":
+          description: OAuth callback handled
+
+  /profile:
+    get:
+      summary: Get Yahoo user profile
+      operationId: getProfile
+      responses:
+        "200":
+          description: Returns the authenticated user profile
+
+  /my-leagues:
+    get:
+      summary: Get leagues for authenticated user
+      operationId: getMyLeagues
+      responses:
+        "200":
+          description: Returns all leagues for the authenticated user
+
+  /my-team:
+    get:
+      summary: Get authenticated user's team
+      operationId: getMyTeam
+      responses:
+        "200":
+          description: Returns the authenticated user's fantasy team
+
+  /league/{league_id}:
+    get:
+      summary: Get league details
+      operationId: getLeague
+      parameters:
+        - in: path
+          name: league_id
+          required: true
+          schema:
+            type: string
+          description: Numeric ID or full Yahoo league key (e.g., 461.l.1157326)
+      responses:
+        "200":
+          description: Returns league details
+
+  /matchups/{league_id}/{week}:
+    get:
+      summary: Get matchups for a given week
+      operationId: getMatchups
+      parameters:
+        - in: path
+          name: league_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: week
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Returns weekly matchups
+
+  /standings/{league_id}:
+    get:
+      summary: Get league standings
+      operationId: getStandings
+      parameters:
+        - in: path
+          name: league_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Returns league standings
+
+  /transactions/{league_id}:
+    get:
+      summary: Get recent transactions
+      operationId: getTransactions
+      parameters:
+        - in: path
+          name: league_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Returns recent league transactions
+
+  /teams/{league_id}:
+    get:
+      summary: Get all teams in a league
+      operationId: getTeams
+      parameters:
+        - in: path
+          name: league_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Returns all teams in the league
+
+  /roster/{team_key}:
+    get:
+      summary: Get a team roster with enriched stats
+      operationId: getRoster
+      parameters:
+        - in: path
+          name: team_key
+          required: true
+          schema:
+            type: string
+          description: Yahoo team key (e.g., 461.l.1157326.t.1)
+        - in: query
+          name: week
+          required: false
+          schema:
+            type: string
+          description: Optional week number for week-specific stats
+      responses:
+        "200":
+          description: Returns team roster with enriched player stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  team_key:
+                    type: string
+                  league_id:
+                    type: string
+                  week:
+                    type: string
+                    nullable: true
+                  count:
+                    type: integer
+                  players:
+                    type: array
+                    items:
+                      type: object
+                  raw:
+                    type: object
+        "500":
+          description: Internal server error
+
+  /all-rosters/{league_id}:
+    get:
+      summary: Get simplified rosters for all teams in a league with enriched stats
+      operationId: getAllRosters
+      parameters:
+        - in: path
+          name: league_id
+          required: true
+          schema:
+            type: string
+          description: Yahoo league ID (digits or full key like 461.l.1157326)
+        - in: query
+          name: week
+          required: false
+          schema:
+            type: string
+          description: Optional week number for week-specific stats
+      responses:
+        "200":
+          description: Returns simplified rosters for all teams with enriched player stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  league_id:
+                    type: string
+                  week:
+                    type: string
+                    nullable: true
+                  teams:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        team_key:
+                          type: string
+                        team_id:
+                          type: string
+                        name:
+                          type: string
+                        manager:
+                          type: string
+                        players:
+                          type: array
+                          items:
+                            type: object
+        "500":
+          description: Internal server error
+
+  /available-players/{league_id}:
+    get:
+      summary: Get available players in a league with enriched stats
+      description: >
+        Returns available players with enriched stats. Any query parameters (except `week`)
+        are passed through to Yahoo as filters. The `week` parameter is handled separately
+        for week-specific stats.
+      operationId: getAvailablePlayers
+      parameters:
+        - in: path
+          name: league_id
+          required: true
+          schema:
+            type: string
+          description: Yahoo league ID (digits or full key)
+        - in: query
+          name: week
+          required: false
+          schema:
+            type: string
+          description: Optional week number for week-specific stats
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+          description: Player status filter (passed to Yahoo)
+        - in: query
+          name: position
+          required: false
+          schema:
+            type: string
+          description: Player position filter (passed to Yahoo)
+      responses:
+        "200":
+          description: Returns available players with enriched stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  league_id:
+                    type: string
+                  week:
+                    type: string
+                    nullable: true
+                  count:
+                    type: integer
+                  players:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        player_key:
+                          type: string
+                        name:
+                          type: string
+                        team:
+                          type: string
+                        position:
+                          type: string
+                        stats:
+                          type: array
+                          items:
+                            type: object
+                  raw:
+                    type: object
+        "500":
+          description: Internal server error
+
+  /waivers:
+    get:
+      summary: Get available players (waivers/free agents) with enriched stats
+      description: >
+        Returns available players in a Yahoo Fantasy Football league with enriched stats,
+        with optional filtering by position, availability status, and week.
+      operationId: getWaivers
+      parameters:
+        - name: league_id
+          in: query
+          required: true
+          schema:
+            type: string
+            example: "461.l.1157326"
+          description: Yahoo Fantasy league ID (digits or full key)
+        - name: position
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [QB, RB, WR, TE, K, DEF, ALL]
+            default: ALL
+          description: Filter by player position
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [A, FA, W]
+            default: A
+          description: >
+            Player availability filter:
+            - `A`: All available players
+            - `FA`: Free agents only
+            - `W`: Players currently on waivers
+        - name: week
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional week number for week-specific stats
+      responses:
+        "200":
+          description: Successfully retrieved available players with enriched stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  league_id:
+                    type: string
+                  position:
+                    type: string
+                  status:
+                    type: string
+                  week:
+                    type: string
+                    nullable: true
+                  count:
+                    type: integer
+                  players:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        player_key:
+                          type: string
+                          example: "nfl.p.30199"
+                        name:
+                          type: string
+                          example: "Player Name"
+                        team:
+                          type: string
+                          example: "KC"
+                        position:
+                          type: string
+                          example: "RB"
+                        status:
+                          type: string
+                          example: "FA"
+                        stats:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              stat_id:
+                                type: string
+                              stat_name:
+                                type: string
+                              value:
+                                type: [string, number, "null"]
+                        stats_type:
+                          type: string
+                          nullable: true
+                        week:
+                          type: string
+                          nullable: true
+        "400":
+          description: Missing required parameters or invalid query
+        "500":
+          description: Internal server error
+
+  /player:
+    get:
+      summary: Get one or more players' stats (league-scoped)
+      description: >
+        Returns league-scoped stats for one or more Yahoo player keys. You can pass
+        repeated `player_key` params and/or a comma-separated `player_keys` param.
+      operationId: getPlayerStats
+      parameters:
+        - name: league_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Yahoo league ID (digits or full key like 461.l.XXXX)
+        - name: player_key
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Repeatable. Provide one or more player_key params (e.g., player_key=nfl.p.30199&player_key=nfl.p.12345).
+        - name: player_keys
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Comma-separated Yahoo player keys (e.g., nfl.p.30199,nfl.p.12345).
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [season, week]
+          description: Stats coverage type. If `week`, you must also supply `week`.
+        - name: week
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            Week number. Required if `type=week`, but can also be provided standalone
+            for week-specific stats (will automatically set `stats_type=week`).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlayersStatsResponse"
+        "400":
+          description: Missing or invalid parameters
+        "502":
+          description: Upstream Yahoo error
+        "500":
+          description: Internal server error
+      description: >
+        Returns league-scoped stats for one or more players. Supports batch fetching
+        of multiple players in a single request. If some player keys are invalid,
+        the response will include a `warnings` field with skipped players.
+
+components:
+  schemas:
+    EnrichedStat:
+      type: object
+      properties:
+        stat_id:
+          type: string
+        stat_name:
+          type: [string, "null"]
+        value:
+          type: [string, number, "null"]
+    PlayerStatsPayload:
+      type: object
+      properties:
+        league_id:
+          type: string
+        player_key:
+          type: string
+        name:
+          type: [string, "null"]
+        team:
+          type: [string, "null"]
+        positions:
+          type: array
+          items:
+            type: string
+        stats_type:
+          type: [string, "null"]
+          description: season or week
+        week:
+          type: [string, "null"]
+        stats:
+          type: array
+          items:
+            $ref: "#/components/schemas/EnrichedStat"
+    PlayersStatsResponse:
+      type: object
+      properties:
+        count:
+          type: integer
+          description: Number of players with stats successfully retrieved
+        players:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlayerStatsPayload"
+        warnings:
+          type: object
+          nullable: true
+          description: Present if some requested players could not be fetched
+          properties:
+            skipped_players:
+              type: array
+              items:
+                type: string
+              description: List of player keys that were skipped
+            message:
+              type: string
+              description: Explanation of why players were skipped
