@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 token.json
 
+# macOS
+.DS_Store
+.DS_Store?
