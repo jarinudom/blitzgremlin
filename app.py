@@ -1,10 +1,18 @@
 import os
 import json
 import time
+import logging
 import requests
 import xmltodict
 from flask import Flask, redirect, request, session, jsonify
 from requests_oauthlib import OAuth2Session
+
+# Set up logging for Yahoo API requests
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "supersecret")
@@ -46,14 +54,16 @@ def yahoo_session():
 
     # proactive refresh if expiring within 5 minutes
     if token.get("expires_at") and token["expires_at"] - time.time() < 300:
+        logger.info(f"Refreshing Yahoo OAuth token (expiring soon)")
         extra = {"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET}
         yahoo = OAuth2Session(CLIENT_ID, token=token)
         try:
             new_token = yahoo.refresh_token(TOKEN_URL, **extra)
             save_token(new_token)
             token = new_token
+            logger.info("Yahoo OAuth token refreshed successfully")
         except Exception as e:
-            print("⚠️ Token refresh failed:", e)
+            logger.error(f"Yahoo OAuth token refresh failed: {e}")
 
     yahoo = OAuth2Session(
         CLIENT_ID,
@@ -66,12 +76,72 @@ def yahoo_session():
     return yahoo
 
 def fetch_yahoo(url):
+    """Fetch data from Yahoo Fantasy API with logging."""
     yahoo = yahoo_session()
     if not yahoo:
+        logger.warning("Yahoo API request failed: Not authenticated")
         return {"error": "Not authenticated"}
-    resp = yahoo.get(url)
-    resp.raise_for_status()
-    return xmltodict.parse(resp.content)
+    
+    # Log the request URL
+    logger.info(f"Yahoo API request: {url}")
+    
+    try:
+        resp = yahoo.get(url)
+        status_code = resp.status_code
+        
+        # Log successful requests (just status)
+        if resp.ok:
+            parsed_data = xmltodict.parse(resp.content)
+            
+            # Check for errors in the parsed response (Yahoo sometimes returns 200 with errors)
+            if isinstance(parsed_data, dict):
+                # Check for common error indicators in Yahoo API responses
+                error_found = False
+                if parsed_data.get("error"):
+                    error_found = True
+                else:
+                    fantasy_content = parsed_data.get("fantasy_content", {})
+                    if isinstance(fantasy_content, dict):
+                        error = fantasy_content.get("error")
+                        if error:
+                            error_found = True
+                
+                if error_found:
+                    logger.error(f"Yahoo API returned error in response: {status_code} - URL: {url}")
+                    logger.error(f"Yahoo API error response: {json.dumps(parsed_data, indent=2)}")
+                else:
+                    logger.info(f"Yahoo API response: {status_code} OK")
+            
+            return parsed_data
+        else:
+            # Log non-successful responses with details
+            logger.error(f"Yahoo API response: {status_code} - URL: {url}")
+            try:
+                # Try to parse error response
+                error_data = xmltodict.parse(resp.content)
+                logger.error(f"Yahoo API error response: {json.dumps(error_data, indent=2)}")
+            except Exception:
+                # If parsing fails, log raw content (truncated)
+                content_preview = resp.text[:500] if resp.text else "No content"
+                logger.error(f"Yahoo API error response (raw): {content_preview}")
+            
+            resp.raise_for_status()
+            return xmltodict.parse(resp.content)
+            
+    except requests.exceptions.HTTPError as e:
+        # Log HTTP errors with response details
+        logger.error(f"Yahoo API HTTP error: {e.response.status_code} - URL: {url}")
+        try:
+            error_data = xmltodict.parse(e.response.content)
+            logger.error(f"Yahoo API error response: {json.dumps(error_data, indent=2)}")
+        except Exception:
+            content_preview = e.response.text[:500] if e.response.text else "No content"
+            logger.error(f"Yahoo API error response (raw): {content_preview}")
+        raise
+    except Exception as e:
+        # Log other exceptions
+        logger.error(f"Yahoo API request exception: {type(e).__name__}: {str(e)} - URL: {url}")
+        raise
 
 # -------------------------------
 # Routes
