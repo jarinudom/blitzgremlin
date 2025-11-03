@@ -846,12 +846,8 @@ def register_test_routes(app: Flask) -> None:
         Returns:
             JSON with auth status, login confirmation, and player data
         """
-        from auth import load_token, yahoo_session, save_token
-        from requests_oauthlib import OAuth2Session
         import time
-        from config import CLIENT_ID, CLIENT_SECRET, TOKEN_URL
-        from models import Player
-        from yahoo_api import fetch_yahoo, build_player_stats_url, parse_player_stats_response, get_league_stat_categories
+        from auth import load_token
         
         response_data = {
             "test": "player_fetch",

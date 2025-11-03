@@ -1,6 +1,6 @@
 """Player model for Yahoo Fantasy API."""
+import logging
 import time
-from typing import Optional
 
 from config import CACHE_TTL
 from utils import normalize_league_id
@@ -8,6 +8,8 @@ from yahoo_api import (
     fetch_yahoo, build_player_stats_url, parse_player_stats_response,
     get_league_stat_categories
 )
+
+logger = logging.getLogger(__name__)
 
 
 class Player:
@@ -158,7 +160,7 @@ class Player:
                     if stats.get("week"):
                         result["week"] = stats.get("week")
             except Exception as e:
-                print(f"⚠️ Error including stats for player {self.player_key}: {e}")
+                logger.warning(f"Error including stats for player {self.player_key}: {e}")
         
         return result
     
@@ -181,7 +183,7 @@ class Player:
             Dictionary with enriched stats including stat names, or None if error
         """
         if not self.player_key:
-            print("⚠️ Player key is required to fetch stats")
+            logger.warning("Player key is required to fetch stats")
             return None
         
         normalized_league_id = normalize_league_id(league_id)
@@ -201,7 +203,7 @@ class Player:
             data = fetch_yahoo(url)
             
             if isinstance(data, dict) and data.get("error"):
-                print(f"⚠️ Error fetching stats: {data.get('error')}")
+                logger.error(f"Error fetching stats: {data.get('error')}")
                 return None
             
             parsed_stats = parse_player_stats_response(data)
@@ -237,7 +239,7 @@ class Player:
             return result
             
         except Exception as e:
-            print(f"⚠️ Error fetching player stats for {self.player_key}: {e}")
+            logger.error(f"Error fetching player stats for {self.player_key}: {e}")
             return None
     
     def clear_stats_cache(self, cache_key: str | None = None) -> None:
