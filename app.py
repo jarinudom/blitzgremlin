@@ -688,13 +688,14 @@ def get_waivers():
 def build_player_stats_url(league_id: str, player_key: str, stats_type: str | None, week: str | None) -> str:
     """Build Yahoo API URL to fetch a player's stats within a league context.
     Uses the league-scoped players collection so stat ids/values align with the league's settings.
+    
+    Yahoo API format: league/{league_id}/players;player_keys={keys}/stats
+    Note: type and week parameters may not be supported in this URL format by Yahoo.
+    If filtering is needed, fetch all stats and filter client-side.
     """
+    # Yahoo API doesn't support type/week as semicolon params after /stats
+    # Fetch all stats - the API will return what's available
     resource = f"league/{league_id}/players;player_keys={player_key}/stats"
-    # Append optional stats selectors per Yahoo format
-    if stats_type:
-        resource += f";type={stats_type}"
-    if week:
-        resource += f";week={week}"
     return f"{YAHOO_BASE_URL}/{resource}"
 
 
@@ -954,13 +955,14 @@ def get_player_stats():
 ###############################################################
 
 def build_multi_player_stats_url(league_id: str, player_keys: list[str], stats_type: str | None, week: str | None) -> str:
-    """Build Yahoo API URL for multiple players in a league context."""
+    """Build Yahoo API URL for multiple players in a league context.
+    
+    Note: Yahoo API doesn't support type/week as semicolon params after /stats.
+    We fetch all available stats and filter client-side if needed.
+    """
     joined = ",".join(player_keys)
     resource = f"league/{league_id}/players;player_keys={joined}/stats"
-    if stats_type:
-        resource += f";type={stats_type}"
-    if week:
-        resource += f";week={week}"
+    # Don't add type/week parameters - Yahoo doesn't support them in this format
     return f"{YAHOO_BASE_URL}/{resource}"
 
 
