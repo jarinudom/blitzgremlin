@@ -147,7 +147,7 @@ paths:
           required: false
           schema:
             type: string
-          description: Optional week number for week-specific stats
+          description: Optional week number for week-specific stats (aggregated week totals, not per-game)
       responses:
         "200":
           description: Returns team roster with enriched player stats
@@ -233,7 +233,7 @@ paths:
       description: >
         Returns available players with enriched stats. Any query parameters (except `week`)
         are passed through to Yahoo as filters. The `week` parameter is handled separately
-        for week-specific stats.
+        for week-specific stats. Weekly stats are aggregated totals for that week, not game-by-game breakdowns.
       operationId: getAvailablePlayers
       parameters:
         - in: path
@@ -247,7 +247,7 @@ paths:
           required: false
           schema:
             type: string
-          description: Optional week number for week-specific stats
+          description: Optional week number for week-specific stats (aggregated week totals, not per-game)
         - in: query
           name: status
           required: false
@@ -303,6 +303,7 @@ paths:
       description: >
         Returns available players in a Yahoo Fantasy Football league with enriched stats,
         with optional filtering by position, availability status, and week.
+        Weekly stats are aggregated totals for that week, not game-by-game breakdowns.
       operationId: getWaivers
       parameters:
         - name: league_id
@@ -337,7 +338,7 @@ paths:
           required: false
           schema:
             type: string
-          description: Optional week number for week-specific stats
+          description: Optional week number for week-specific stats (aggregated week totals, not per-game)
       responses:
         "200":
           description: Successfully retrieved available players with enriched stats
@@ -405,6 +406,11 @@ paths:
       description: >
         Returns league-scoped stats for one or more Yahoo player keys. You can pass
         repeated `player_key` params and/or a comma-separated `player_keys` param.
+        
+        **IMPORTANT:** Weekly stats (`type=week&week=X`) return aggregated totals FOR that week,
+        NOT game-by-game breakdowns. Yahoo's API only provides week totals, not individual game stats.
+        This is expected behavior - if a player has stats for week 1, those are their total stats
+        accumulated during that week's games, not per-game splits.
       operationId: getPlayerStats
       parameters:
         - name: league_id
@@ -431,7 +437,7 @@ paths:
           schema:
             type: string
             enum: [season, week]
-          description: Stats coverage type. If `week`, you must also supply `week`.
+          description: Stats coverage type. `season` = full season totals, `week` = aggregated totals for that week (not game-by-game).
         - name: week
           in: query
           required: false
@@ -440,6 +446,7 @@ paths:
           description: >
             Week number. Required if `type=week`, but can also be provided standalone
             for week-specific stats (will automatically set `stats_type=week`).
+            Returns aggregated totals for that week, NOT per-game breakdowns.
       responses:
         "200":
           description: OK
@@ -457,6 +464,9 @@ paths:
         Returns league-scoped stats for one or more players. Supports batch fetching
         of multiple players in a single request. If some player keys are invalid,
         the response will include a `warnings` field with skipped players.
+        
+        **Weekly stats are aggregated week totals, not game-by-game breakdowns.** This is how
+        Yahoo's API works - it does not provide per-game splits within a week.
 
 components:
   schemas:

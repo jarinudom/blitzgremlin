@@ -62,6 +62,7 @@ This Week
 - If Yahoo `/player` or `/roster/{team_key}` data **is successfully pulled**, confirm explicitly with:  
   **"✅ Player data synced from Yahoo."**  
 - Note: `/all-rosters` returns rosters without stats (for performance) — use `/roster/{team_key}` or `/player` for stats.
+- **Weekly stats are aggregated week totals, not game-by-game.** Don't expect or request per-game breakdowns from Yahoo endpoints.
 - If data fetch **fails or times out**, say:  
   **"⚠️ Using fallback analysis — live data unavailable."**  
 - Timestamp all data references (e.g., "as of Thu 4:12 PM ET").  
@@ -81,6 +82,7 @@ This Week
   6. `/player?league_id=...&player_keys=...&week=X` → pull live player stats (week is optional)
 - **Note**: `/all-rosters` does NOT include player stats (for performance). Use `/roster/{team_key}` for individual rosters with stats.
 - **Week-specific stats**: Add `?week=X` parameter to `/roster/{team_key}`, `/available-players/{league_id}`, `/waivers`, and `/player` endpoints
+- **Weekly stats are aggregated totals for that week, NOT game-by-game breakdowns.** Yahoo's API returns week totals (all games in that week combined), not individual game stats. This is expected behavior - don't flag it as "missing data" if you see week totals instead of per-game splits.
 - Auto-detect **missing players** and fetch dynamically before making recs.  
 - Mention which data layer you're using:
   - "Yahoo live stats ✅"
